@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>家庭仓库 / 收纳箱管理 V4</title>
+<title>家庭仓库 / 收纳箱管理 V9</title>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#18231f;--muted:#66746e;--line:#dbe4df;
@@ -42,6 +42,10 @@ label{display:block;font-size:13px;font-weight:650;margin:11px 0 5px}
 .badge{display:inline-block;background:#eef5f1;color:#31584a;border-radius:999px;padding:3px 8px;font-size:12px;margin:2px 4px 2px 0}
 .badge.warn{background:var(--warn2);color:var(--warn)}
 .badge.danger{background:var(--danger2);color:var(--danger)}
+.usage-open{border-left:4px solid var(--warn);background:#fffaf0}
+.usage-badge{display:inline-block;background:var(--warn2);color:var(--warn);border-radius:999px;padding:3px 8px;font-size:12px;margin:2px 4px 2px 0}
+.priority-box{background:#fffaf0;border:1px solid #edd7a5}
+
 .actions{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap;margin-top:9px}
 .empty{padding:28px;text-align:center;color:var(--muted)}
 .table-wrap{overflow:auto}
@@ -113,16 +117,30 @@ th{font-size:12px;color:var(--muted)}
       </div>
       <div id="metrics" class="grid" style="margin-top:14px"></div>
       <div class="card" style="margin-top:14px">
-        <h3 style="margin-top:0">最近操作</h3>
-        <div id="recentHistory" class="list"></div>
-      </div>
-      <div class="card" style="margin-top:14px">
         <h3 style="margin-top:0">搜索库存</h3>
         <div class="toolbar">
           <input id="dashSearch" placeholder="搜索物品、规格、收纳箱、位置或标签">
         </div>
         <div id="dashSearchResults"><div class="empty">输入关键词即可搜索</div></div>
       </div>
+
+      <div class="card priority-box" style="margin-top:14px">
+        <h3 style="margin-top:0">⭐ 正在使用 / 优先使用</h3>
+        <div class="muted">标记为“正在使用 / 已开封”的物品会优先显示。</div>
+        <div id="priorityItems" class="list" style="margin-top:10px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin-top:0">最近操作</h3>
+        <div id="recentHistory" class="list"></div>
+      </div>
+
+      
+
+
+      
+
+      
     </section>
 
 
@@ -285,6 +303,11 @@ function load(){
   try{
     const x=JSON.parse(localStorage.getItem(KEY)||"null");
     if(!x || x.version!==1 || !Array.isArray(x.locations) || !Array.isArray(x.containers) || !Array.isArray(x.items) || !Array.isArray(x.containerItems)) return seed();
+    x.containerItems.forEach(ci=>{
+      ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));
+      ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));
+      if(!ci.updatedAt)ci.updatedAt=iso();
+    });
     return x;
   }catch(e){ return seed(); }
 }
@@ -361,6 +384,7 @@ function renderDashboard(){
     return `<div class="item"><div class="row spread"><div><b>${esc(t.label)}</b><div class="muted">${fmtTime(t.time)}</div></div><div>${c?`<span class="badge">${esc(c.name)}</span>`:""}${i?`<span class="badge">${esc(i.name)}</span>`:""}</div></div>${t.notes?`<div class="muted">${esc(t.notes)}</div>`:""}</div>`
   }).join(""):"<div class='empty'>暂无操作</div>";
 
+  renderDashboardPriority();
   const q=$("#dashSearch")?.value.trim()||"";
   if(q)renderSearchResults(q,"#dashSearchResults");
   else if($("#dashSearchResults"))$("#dashSearchResults").innerHTML='<div class="empty">输入关键词即可搜索</div>';
@@ -369,6 +393,29 @@ function renderDashboard(){
 function matchText(...xs){
   return xs.filter(Boolean).join(" ").toLowerCase()
 }
+function renderDashboardPriority(){
+  const rows=db.containerItems
+    .filter(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0)
+    .sort((a,b)=>String(b.updatedAt||"").localeCompare(String(a.updatedAt||"")));
+  const box=$("#priorityItems");
+  if(!box)return;
+  box.innerHTML=rows.length?rows.map(x=>{
+    const i=item(x.itemId),c=container(x.containerId);
+    return `<div class="item usage-open">
+      <div class="row spread">
+        <div><b>⭐ ${esc(i?.name||"未知物品")}</b>${i?.variant?` · ${esc(i.variant)}`:""}
+          <div class="path">📦 ${esc(c?.name||"未知箱")} · 📍 ${esc(locationPath(c?.locationId)||"未知位置")}</div>
+        </div>
+        <div class="row">
+          <span class="usage-badge">正在使用 / 已开封</span>
+          <b>${esc(x.inUseQty)} / ${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}</b>
+          <button type="button" class="secondary" data-action="toggleUsage" data-id="${x.id}">调整</button>
+        </div>
+      </div>
+    </div>`;
+  }).join(""):'<div class="empty">暂无标记为“正在使用 / 已开封”的物品</div>';
+}
+
 function renderSearchResults(q,target){
   const qq=q.toLowerCase();
   const results=[];
@@ -399,6 +446,10 @@ function renderContainers(){
   const rows=db.containers.filter(c=>{
     const l=location(c.locationId);
     return !q||matchText(c.name,c.code,c.type,tagsOf(c.tags).join(" "),c.notes,l?.name,locationPath(c.locationId)).includes(q)
+  }).sort((a,b)=>{
+    const au=containerItems(a.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
+    const bu=containerItems(b.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
+    return Number(bu)-Number(au)||a.name.localeCompare(b.name);
   });
   $("#containerList").innerHTML=rows.length?rows.map(c=>{
     const l=location(c.locationId);
@@ -416,20 +467,36 @@ function renderContainers(){
         </div>
       </div>
       <div style="margin-top:8px">${tagsOf(c.tags).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}</div>
-      <div class="muted" style="margin-top:7px">${entries.length?entries.map(x=>{const i=item(x.itemId);return `<span class="badge">${esc(i?.name||"未知")} × ${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}</span>`}).join(""):"暂无物品"} </div>
+      <div class="muted" style="margin-top:7px">${entries.length?entries.map(x=>{
+  const i=item(x.itemId);
+  return `<span class="${Number(x.inUseQty)>0?'usage-badge':'badge'}">
+  ${Number(x.inUseQty)>0?'⭐ ':''}${esc(i?.name||"未知")} × ${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}${Number(x.inUseQty)>0?`（使用中 ${esc(x.inUseQty)}）`:''}
+  <button type="button" class="ghost" style="padding:2px 5px" data-action="toggleUsage" data-id="${x.id}">调整</button>
+</span>`;
+}).join(""):"暂无物品"} </div>
     </div>`
   }).join(""):'<div class="empty">没有匹配的收纳箱</div>';
 }
 
 function renderItems(){
   const q=$("#itemFilter").value.trim().toLowerCase();
-  const rows=db.items.filter(i=>!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q));
+  const rows=db.items.filter(i=>!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q))
+    .sort((a,b)=>{
+      const au=itemContainers(a.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
+      const bu=itemContainers(b.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
+      return Number(bu)-Number(au)||a.name.localeCompare(b.name);
+    });
   $("#itemList").innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>物品</th><th>总数量</th><th>所在收纳箱</th><th>标签</th><th>操作</th></tr></thead><tbody>${rows.map(i=>{
     const cs=itemContainers(i.id).filter(x=>Number(x.quantity)>0);
     const low=Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock);
     return `<tr><td><b>${esc(i.name)}</b><br><span class="muted">${esc(i.variant||"无规格")} · ${esc(i.unit||"")}</span></td>
       <td>${esc(itemTotal(i.id))} ${esc(i.unit||"")}${low?`<br><span class="badge danger">低库存</span>`:""}</td>
-      <td>${cs.length?cs.map(x=>{const c=container(x.containerId);return `<span class="badge">${esc(c?.name||"未知箱")} · ${esc(x.quantity)}</span>`}).join(""):"<span class='muted'>未放入收纳箱</span>"}</td>
+      <td>${cs.length?cs.map(x=>{
+        const c=container(x.containerId);
+        return `<span class="${Number(x.inUseQty)>0?'usage-badge':'badge'}">${Number(x.inUseQty)>0?'⭐ ':''}${esc(c?.name||"未知箱")} · ${esc(x.quantity)}${Number(x.inUseQty)>0?` · 使用中 ${esc(x.inUseQty)}`:''}
+          <button type="button" class="ghost" style="padding:2px 5px" data-action="toggleUsage" data-id="${x.id}">${Number(x.inUseQty)>0?'取消使用中':'标记使用中'}</button>
+        </span>`;
+      }).join(""):"<span class='muted'>未放入收纳箱</span>"}</td>
       <td>${tagsOf(i.tags).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}</td>
       <td><div class="actions" style="justify-content:flex-start">
         <button type="button" class="secondary" data-action="viewItem" data-id="${i.id}">详情</button>
@@ -512,8 +579,9 @@ function openItem(id=null){
     <label>最低库存（可选）<input id="f_min" type="number" min="0" step="1" value="${Number(i?.minStock)||0}"></label>
     ${i?"":
       `<label>直接放入收纳箱<select id="f_container"><option value="">暂不入箱</option>${optionsContainers(defaultContainer)}</select></label>
-       <label>入箱数量<input id="f_initialQty" type="number" min="0" step="0.01" value="1"></label>
-       <div class="notice">新增物品时可以直接选择收纳箱并录入数量，不需要再做一次库存操作。</div>`
+       <label>入箱数量<input id="f_initialQty" type="number" min="0" step="1" value="1" inputmode="numeric"></label>
+       <label>其中正在使用 / 已开封数量<input id="f_initialInUseQty" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
+       <div class="notice">例如总数 3 卷胶带，其中 1 卷正在使用：总数量填 3，正在使用数量填 1。系统会优先使用这 1 卷。数量按整数计算。</div>`
     }
     <label>标签（逗号分隔）<input id="f_tags" value="${esc(tagsOf(i?.tags).join(","))}" placeholder="工具, 装修"></label>
     <label>备注<textarea id="f_notes" rows="3">${esc(i?.notes||"")}</textarea></label>
@@ -534,16 +602,18 @@ function openItem(id=null){
     db.items.push(x);
 
     const cid=$("#f_container").value;
-    const qty=Number($("#f_initialQty").value)||0;
+    const qty=Math.max(0,Math.round(Number($("#f_initialQty").value)||0));
+    const initialInUseQty=Math.max(0,Math.min(qty,Math.round(Number($("#f_initialInUseQty")?.value)||0)));
     if(cid && qty>0){
       db.containerItems.push({
-        id:uid("ci"),containerId:cid,itemId:x.id,quantity:qty,unit:x.unit,notes:"新增物品时入箱"
+        id:uid("ci"),containerId:cid,itemId:x.id,quantity:qty,unit:x.unit,notes:"新增物品时入箱",inUseQty:initialInUseQty,updatedAt:iso()
       });
       const c=container(cid);
       if(c)c.status="ACTIVE";
       log("ADD_ITEM","新增物品并入箱",{
         containerId:cid,itemId:x.id,quantity:qty,unit:x.unit,notes:`${c?.name||""}`
       });
+      if(initialInUseQty>0)log("USAGE_STATUS","标记正在使用 / 已开封",{containerId:cid,itemId:x.id,quantity:initialInUseQty,unit:x.unit,notes:`共 ${qty}，其中 ${initialInUseQty} 正在使用`});
     }else{
       log("MASTER","新增物品",{itemId:x.id,notes:x.name});
     }
@@ -681,6 +751,61 @@ function deleteLocation(id){
   });
 }
 
+function toggleUsage(containerItemId){
+  const row=db.containerItems.find(x=>x.id===containerItemId);
+  if(!row)return;
+  if(Number(row.quantity)<=0)return;
+
+  const i=item(row.itemId);
+  const current=Number(row.inUseQty)||0;
+
+  openModal(`设置使用中数量 · ${i?.name||"物品"}`,`
+    <div class="notice">
+      总数量：<b>${esc(row.quantity)} ${esc(row.unit||i?.unit||"")}</b>
+    </div>
+    <label>正在使用 / 已开封数量
+      <input id="usageQtyInput" type="number" min="0" max="${esc(row.quantity)}" step="1" value="${esc(Math.round(current))}" inputmode="numeric">
+    </label>
+    <div class="muted">
+      例如：总数 3 卷，其中 1 卷正在使用，就填写 1。填写 0 即取消“正在使用”。
+    </div>
+    <div class="actions">
+      <button type="button" class="secondary" id="usageCancel">取消</button>
+      <button type="button" id="usageSave">保存</button>
+    </div>
+  `,null);
+
+  $("#usageCancel").onclick=closeModal;
+  $("#usageSave").onclick=()=>{
+    const value=Math.round(Number($("#usageQtyInput").value));
+    if(!Number.isFinite(value)||value<0||value>Number(row.quantity)){
+      alert(`请输入 0 到 ${row.quantity} 之间的数量。`);
+      return;
+    }
+    row.inUseQty=value;
+    row.updatedAt=iso();
+
+    log(
+      "USAGE_STATUS",
+      value>0?"设置正在使用 / 已开封数量":"取消正在使用 / 已开封",
+      {
+        containerId:row.containerId,
+        itemId:row.itemId,
+        quantity:value,
+        unit:row.unit,
+        notes:`总数 ${row.quantity}；使用中 ${value}`
+      }
+    );
+
+    closeModal();
+    renderAll();
+    toast(value>0
+      ? `已设置 ${value} ${row.unit||i?.unit||""} 正在使用`
+      : `已取消“${i?.name||"物品"}”的使用中标记`);
+  };
+}
+
+
 function openMoveContainer(id){
   const c=container(id);if(!c)return;
   openModal(`移动收纳箱 · ${c.name}`,`
@@ -702,28 +827,39 @@ function openMoveContainer(id){
 function openItemOperation(id){
   const i=item(id);if(!i)return;
   openModal(`物品库存操作 · ${i.name}`,`
-    <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option></select></label>
+    <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option><option value="setUseQty">设置“正在使用 / 已开封”数量</option></select></label>
     <label>收纳箱<select id="f_container">${optionsContainers()}</select></label>
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
-    <label>数量<input id="f_qty" type="number" min="0.01" step="0.01" value="1"></label>
+    <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
+    <label id="inUseWrap">正在使用 / 已开封数量<input id="f_useQty" type="number" min="0" step="0.01" value="0"></label>
     <div id="operationHelp" class="notice">新增数量：把物品放入指定收纳箱。</div>
     ${modalFormButtons("执行操作")}
   `,()=>{
-    const op=$("#f_op").value,cid=$("#f_container").value,to=$("#f_to").value,qty=Number($("#f_qty").value);
-    if(!cid||!Number.isFinite(qty)||qty<=0)throw Error("请选择收纳箱并填写有效数量");
+    const op=$("#f_op").value,cid=$("#f_container").value,to=$("#f_to").value,qty=Math.max(0,Math.round(Number($("#f_qty").value)||0)),markInUse=$("#f_inUse")?.checked===true;
+    if(!cid)throw Error("请选择收纳箱"); if(op!=="setUseQty"&&(!Number.isFinite(qty)||qty<=0))throw Error("请填写有效数量");
     let row=db.containerItems.find(x=>x.containerId===cid&&x.itemId===id);
     if(op==="add"){
       if(!row){row={id:uid("ci"),containerId:cid,itemId:id,quantity:0,unit:i.unit,notes:""};db.containerItems.push(row)}
-      const before=row.quantity;row.quantity+=qty;
+      const before=row.quantity;row.quantity+=qty;row.updatedAt=iso();
+      if(markInUse)row.inUseQty=true;
       const c=container(cid);c.status="ACTIVE";
       log("ADD_ITEM","新增物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()||`前 ${before}，后 ${row.quantity}`});
+      if(markInUse)log("USAGE_STATUS","标记为正在使用 / 已开封",{containerId:cid,itemId:id,quantity:row.quantity,unit:i.unit,notes:"优先使用"});
     }else if(op==="remove"){
       if(!row||row.quantity<qty)throw Error(`该收纳箱中的库存不足。当前为 ${row?.quantity||0} ${i.unit||""}`);
       row.quantity-=qty;
       log("REMOVE_ITEM","取出物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()});
       if(row.quantity===0)db.containerItems=db.containerItems.filter(x=>x.id!==row.id);
       if(!containerItems(cid).some(x=>Number(x.quantity)>0))container(cid).status="EMPTY";
+    }else if(op==="setUseQty"){
+      if(!row||Number(row.quantity)<=0)throw Error("该收纳箱中没有这个物品");
+      const useQty=Math.max(0,Math.min(row.quantity,Math.round(Number($("#f_useQty").value)||0)));
+      row.inUseQty=useQty;row.updatedAt=iso();
+      log("USAGE_STATUS",useQty>0?"设置正在使用 / 已开封数量":"取消正在使用 / 已开封",{
+        containerId:cid,itemId:id,quantity:useQty,unit:i.unit,
+        notes:`总数 ${row.quantity}；使用中 ${useQty}`
+      });
     }else{
       if(!row||row.quantity<qty)throw Error("来源收纳箱库存不足");
       if(!to||to===cid)throw Error("请选择不同的目标收纳箱");
@@ -740,7 +876,8 @@ function openItemOperation(id){
   const sync=()=>{
     const op=$("#f_op").value;
     $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
-    $("#operationHelp").textContent=op==="add"?"新增数量：把物品放入指定收纳箱。":op==="remove"?"取出数量：从指定收纳箱扣减。":"箱间转移：把数量从一个箱子移动到另一个箱子。";
+    if($("#inUseWrap"))$("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
+    $("#operationHelp").textContent=op==="add"?"新增数量：把物品放入指定收纳箱。":op==="remove"?"取出数量：从指定收纳箱扣减。":op==="transfer"?"箱间转移：把数量从一个箱子移动到另一个箱子。":op==="setUseQty"?"设置当前收纳箱中有多少数量正在使用 / 已开封。":"箱间操作";
   };
   $("#f_op").onchange=sync;sync();
 }
@@ -821,6 +958,8 @@ document.addEventListener("click",e=>{
   if(a==="itemOperation")return openItemOperation(id);
   if(a==="deleteItem")return deleteItem(id);
   if(a==="viewLocation")return viewLocation(id);
+  if(a==="editUsageQty")return editUsageQty(id);
+  if(a==="toggleUsage")return toggleUsage(id);
   if(a==="deleteLocation")return deleteLocation(id);
 
   const ra=b.dataset.resultAction,rid=b.dataset.id;
