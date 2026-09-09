@@ -915,7 +915,7 @@ function openItemOperation(id){
   const i=item(id);if(!i)return;
   openModal(`物品库存操作 · ${i.name}`,`
     <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option><option value="setUseQty">设置“正在使用 / 已开封”数量</option></select></label>
-    <label>收纳箱<select id="f_container">${operationContainerOptions(id)}</select></label>
+    <label>收纳箱<select id="f_container">${optionsContainers()}</select></label>
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
     <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
@@ -939,6 +939,11 @@ function openItemOperation(id){
       log("REMOVE_ITEM","取出物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()});
       if(row.quantity===0)db.containerItems=db.containerItems.filter(x=>x.id!==row.id);
       if(!containerItems(cid).some(x=>Number(x.quantity)>0))container(cid).status="EMPTY";
+      if(itemTotal(id)<=0 && Number(i.minStock||0)<=0){
+        db.items=db.items.filter(x=>x.id!==id);
+        db.containerItems=db.containerItems.filter(x=>x.itemId!==id);
+        log("MASTER","库存归零自动删除物品",{itemId:id,notes:`${i.name} 无最低库存要求，库存已全部取出`});
+      }
     }else if(op==="setUseQty"){
       if(!row||Number(row.quantity)<=0)throw Error("该收纳箱中没有这个物品");
       const useQty=Math.max(0,Math.min(row.quantity,Math.round(Number($("#f_useQty").value)||0)));
