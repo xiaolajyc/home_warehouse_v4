@@ -902,7 +902,11 @@ function operationContainerOptions(itemId, selected=""){
   );
   const boxes = db.containers.filter(c =>
     c.status!=="ARCHIVED" && valid.has(c.id)
-  );
+  ).sort((a,b)=>{
+    const ar=db.containerItems.find(x=>x.containerId===a.id&&x.itemId===itemId);
+    const br=db.containerItems.find(x=>x.containerId===b.id&&x.itemId===itemId);
+    return Number(br?.inUseQty||0)-Number(ar?.inUseQty||0);
+  });
   return boxes.length
     ? boxes.map(c=>{
         const row=db.containerItems.find(x=>x.containerId===c.id&&x.itemId===itemId);
@@ -911,11 +915,19 @@ function operationContainerOptions(itemId, selected=""){
     : '<option value="">没有库存可取用的收纳箱</option>';
 }
 
+// 新增数量使用独立的收纳箱列表，不受取出数量的库存过滤影响。
+function addContainerOptions(selected=""){
+  const boxes=db.containers.filter(c=>c.status!=="ARCHIVED");
+  return boxes.length
+    ? boxes.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.name)}</option>`).join("")
+    : '<option value="">暂无可用收纳箱</option>';
+}
+
 function openItemOperation(id){
   const i=item(id);if(!i)return;
   openModal(`物品库存操作 · ${i.name}`,`
     <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option><option value="setUseQty">设置“正在使用 / 已开封”数量</option></select></label>
-    <label>收纳箱<select id="f_container">${optionsContainers()}</select></label>
+    <label>收纳箱<select id="f_container">${addContainerOptions()}</select></label>
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
     <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
@@ -935,8 +947,13 @@ function openItemOperation(id){
       if(markInUse)log("USAGE_STATUS","标记为正在使用 / 已开封",{containerId:cid,itemId:id,quantity:row.quantity,unit:i.unit,notes:"优先使用"});
     }else if(op==="remove"){
       if(!row||row.quantity<qty)throw Error(`该收纳箱中的库存不足。当前为 ${row?.quantity||0} ${i.unit||""}`);
+      // 优先消耗该箱中“正在使用 / 已开封”的数量。
+      const usedBefore=Math.max(0,Number(row.inUseQty)||0);
+      const usedTaken=Math.min(usedBefore,qty);
       row.quantity-=qty;
-      log("REMOVE_ITEM","取出物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()});
+      row.inUseQty=Math.max(0,usedBefore-usedTaken);
+      row.updatedAt=iso();
+      log("REMOVE_ITEM","取出物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()||(usedTaken>0?`优先取用使用中数量 ${usedTaken} ${i.unit||""}`:"")});
       if(row.quantity===0)db.containerItems=db.containerItems.filter(x=>x.id!==row.id);
       if(!containerItems(cid).some(x=>Number(x.quantity)>0))container(cid).status="EMPTY";
       if(itemTotal(id)<=0 && Number(i.minStock||0)<=0){
@@ -969,7 +986,17 @@ function openItemOperation(id){
     const op=$("#f_op").value;
     $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
     if($("#inUseWrap"))$("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
-    if(op==="remove"||op==="setUseQty"){
+    if(op==="add"){
+      // 新增数量：始终允许选择所有未归档收纳箱，不受库存状态影响。
+      const selected=$("#f_container").value;
+      $("#f_container").innerHTML=addContainerOptions(selected);
+    }else if(op==="remove"){
+      // 取出数量：只显示有库存的箱子；每次切换到“取出”时，默认优先选择使用中数量最多的箱子。
+      $("#f_container").innerHTML=operationContainerOptions(id,"");
+      if(!$("#f_container").value){
+        $("#f_container").innerHTML='<option value="">没有库存可取用的收纳箱</option>';
+      }
+    }else if(op==="transfer"||op==="setUseQty"){
       const selected=$("#f_container").value;
       $("#f_container").innerHTML=operationContainerOptions(id,selected);
       if(!$("#f_container").value){
