@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>家庭仓库 / 收纳箱管理 V9</title>
+<title>家庭仓库 / 收纳箱管理 V18</title>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#18231f;--muted:#66746e;--line:#dbe4df;
@@ -45,6 +45,16 @@ label{display:block;font-size:13px;font-weight:650;margin:11px 0 5px}
 .usage-open{border-left:4px solid var(--warn);background:#fffaf0}
 .usage-badge{display:inline-block;background:var(--warn2);color:var(--warn);border-radius:999px;padding:3px 8px;font-size:12px;margin:2px 4px 2px 0}
 .priority-box{background:#fffaf0;border:1px solid #edd7a5}
+.low-stock-box{background:#fff7f7;border:2px solid #e6a8ae}
+.critical-stock-row{border-left-color:#b92b36;background:#fff}
+.stock-ok{background:#e8f4ee;color:#17633f}
+.stock-number{font-size:20px;font-weight:800}
+
+.low-stock-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.low-stock-summary{font-size:13px;color:var(--danger);font-weight:700}
+.low-stock-row{border:1px solid #efc6cb;border-left:5px solid var(--danger);background:#fff}
+.low-stock-number{font-size:20px;font-weight:800;color:var(--danger)}
+
 
 .actions{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap;margin-top:9px}
 .empty{padding:28px;text-align:center;color:var(--muted)}
@@ -116,13 +126,18 @@ th{font-size:12px;color:var(--muted)}
         </div>
       </div>
       <div id="metrics" class="grid" style="margin-top:14px"></div>
-      <div class="card" style="margin-top:14px">
-        <h3 style="margin-top:0">搜索库存</h3>
-        <div class="toolbar">
-          <input id="dashSearch" placeholder="搜索物品、规格、收纳箱、位置或标签">
+      <div class="card low-stock-box" style="margin-top:14px">
+        <div class="low-stock-head">
+          <div>
+            <h3 style="margin:0">⚠️ 低库存 / 需要补充</h3>
+            <div class="muted" style="margin-top:4px">库存低于最低库存就会进入补货清单；当前为 0 的物品会优先显示。</div>
+          </div>
+          <div id="lowStockSummary" class="low-stock-summary"></div>
         </div>
-        <div id="dashSearchResults"><div class="empty">输入关键词即可搜索</div></div>
+        <div id="lowStockItems" class="list" style="margin-top:10px"></div>
       </div>
+
+      
 
       <div class="card priority-box" style="margin-top:14px">
         <h3 style="margin-top:0">⭐ 正在使用 / 优先使用</h3>
@@ -165,6 +180,8 @@ th{font-size:12px;color:var(--muted)}
         </div>
         <div class="toolbar">
           <input id="itemFilter" placeholder="搜索物品 / 规格 / 标签">
+          <button type="button" class="secondary" id="lowOnlyBtn">⚠ 只看低库存</button>
+          <button type="button" class="ghost" id="allItemsBtn">显示全部</button>
         </div>
         <div id="itemList"></div>
       </div>
@@ -248,6 +265,7 @@ th{font-size:12px;color:var(--muted)}
 const KEY = "home-warehouse-v1";
 let db = null;
 let modalAction = null;
+let lowOnly=false;
 
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
@@ -378,6 +396,8 @@ function renderDashboard(){
     ["低库存",low.length,low.length?"需要补充":"暂无提醒"]
   ].map(x=>`<div class="card"><div class="metric">${esc(x[1])}</div><div class="muted">${esc(x[0])}</div><div class="kpi-note muted">${esc(x[2])}</div></div>`).join("");
 
+  renderLowStock();
+
   const tx=db.transactions.slice(0,8);
   $("#recentHistory").innerHTML=tx.length?tx.map(t=>{
     const c=t.containerId?container(t.containerId):null,i=t.itemId?item(t.itemId):null;
@@ -393,6 +413,53 @@ function renderDashboard(){
 function matchText(...xs){
   return xs.filter(Boolean).join(" ").toLowerCase()
 }
+
+function renderLowStock(){
+  const low=db.items.map(i=>{
+    const total=itemTotal(i.id);
+    const min=Math.max(0,Math.round(Number(i.minStock)||0));
+    const need=Math.max(0,min-total);
+    return {i,total,min,need,out:total<=0};
+  }).filter(x=>x.min>0&&x.total<x.min)
+    .sort((a,b)=>Number(b.out)-Number(a.out)||b.need-a.need||a.i.name.localeCompare(b.i.name));
+
+  const summary=$("#lowStockSummary"),box=$("#lowStockItems");
+  if(!summary||!box)return;
+
+  if(!low.length){
+    summary.innerHTML='<span class="stock-ok">库存充足</span>';
+    box.innerHTML='<div class="empty">✅ 没有需要补充的物品。</div>';
+    return;
+  }
+
+  const out=low.filter(x=>x.out).length;
+  summary.textContent=`${low.length} 种需要补充${out?` · ${out} 种已缺货`:""}`;
+
+  box.innerHTML=low.map(x=>`
+    <div class="item low-stock-row ${x.out?'critical-stock-row':''}">
+      <div class="row spread">
+        <div>
+          <b>${x.out?'🔴':'⚠️'} ${esc(x.i.name)}</b>
+          ${x.i.variant?` <span class="muted">· ${esc(x.i.variant)}</span>`:""}
+          <div class="muted" style="margin-top:4px">
+            当前 <b>${esc(x.total)} ${esc(x.i.unit||"")}</b>
+            · 最低库存 ${esc(x.min)} ${esc(x.i.unit||"")}
+          </div>
+        </div>
+        <div class="row">
+          <div style="text-align:right">
+            <div class="stock-number">补 ${esc(x.need)} ${esc(x.i.unit||"")}</div>
+            <div class="muted">${x.out?'已经没有库存':'低于最低库存'}</div>
+          </div>
+          <button type="button" class="secondary" data-action="itemOperation" data-id="${x.i.id}">补货 / 库存操作</button>
+          <button type="button" class="ghost" data-action="editItem" data-id="${x.i.id}">调整最低库存</button>
+        </div>
+      </div>
+    </div>
+  `).join("");
+}
+
+
 function renderDashboardPriority(){
   const rows=db.containerItems
     .filter(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0)
@@ -480,8 +547,11 @@ function renderContainers(){
 
 function renderItems(){
   const q=$("#itemFilter").value.trim().toLowerCase();
-  const rows=db.items.filter(i=>!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q))
-    .sort((a,b)=>{
+  const rows=db.items.filter(i=>{
+    const textOk=!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q);
+    const lowOk=!lowOnly|| (Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock));
+    return textOk&&lowOk;
+  }).sort((a,b)=>{
       const au=itemContainers(a.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
       const bu=itemContainers(b.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
       return Number(bu)-Number(au)||a.name.localeCompare(b.name);
@@ -490,7 +560,7 @@ function renderItems(){
     const cs=itemContainers(i.id).filter(x=>Number(x.quantity)>0);
     const low=Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock);
     return `<tr><td><b>${esc(i.name)}</b><br><span class="muted">${esc(i.variant||"无规格")} · ${esc(i.unit||"")}</span></td>
-      <td>${esc(itemTotal(i.id))} ${esc(i.unit||"")}${low?`<br><span class="badge danger">低库存</span>`:""}</td>
+      <td>${esc(itemTotal(i.id))} ${esc(i.unit||"")}${low?`<br><span class="badge danger">⚠ 低库存 · 最低 ${esc(i.minStock)} ${esc(i.unit||"")}</span>`:""}</td>
       <td>${cs.length?cs.map(x=>{
         const c=container(x.containerId);
         return `<span class="${Number(x.inUseQty)>0?'usage-badge':'badge'}">${Number(x.inUseQty)>0?'⭐ ':''}${esc(c?.name||"未知箱")} · ${esc(x.quantity)}${Number(x.inUseQty)>0?` · 使用中 ${esc(x.inUseQty)}`:''}
@@ -588,7 +658,7 @@ function openItem(id=null){
     ${modalFormButtons(i?"保存修改":"创建物品")}
   `,()=>{
     const name=$("#f_name").value.trim();if(!name)throw Error("请输入物品名称");
-    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:Number($("#f_min").value)||0,
+    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:Math.max(0,Math.round(Number($("#f_min").value)||0)),
       tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),notes:$("#f_notes").value.trim()};
 
     if(i){
@@ -824,11 +894,28 @@ function openMoveContainer(id){
   });
 }
 
+function operationContainerOptions(itemId, selected=""){
+  const valid = new Set(
+    db.containerItems
+      .filter(x => x.itemId===itemId && Number(x.quantity)>0)
+      .map(x => x.containerId)
+  );
+  const boxes = db.containers.filter(c =>
+    c.status!=="ARCHIVED" && valid.has(c.id)
+  );
+  return boxes.length
+    ? boxes.map(c=>{
+        const row=db.containerItems.find(x=>x.containerId===c.id&&x.itemId===itemId);
+        return `<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.name)} · 库存 ${esc(row?.quantity||0)} ${esc(item(itemId)?.unit||"")}</option>`;
+      }).join("")
+    : '<option value="">没有库存可取用的收纳箱</option>';
+}
+
 function openItemOperation(id){
   const i=item(id);if(!i)return;
   openModal(`物品库存操作 · ${i.name}`,`
     <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option><option value="setUseQty">设置“正在使用 / 已开封”数量</option></select></label>
-    <label>收纳箱<select id="f_container">${optionsContainers()}</select></label>
+    <label>收纳箱<select id="f_container">${operationContainerOptions(id)}</select></label>
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
     <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
@@ -877,6 +964,13 @@ function openItemOperation(id){
     const op=$("#f_op").value;
     $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
     if($("#inUseWrap"))$("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
+    if(op==="remove"||op==="setUseQty"){
+      const selected=$("#f_container").value;
+      $("#f_container").innerHTML=operationContainerOptions(id,selected);
+      if(!$("#f_container").value){
+        $("#f_container").innerHTML='<option value="">没有库存可取用的收纳箱</option>';
+      }
+    }
     $("#operationHelp").textContent=op==="add"?"新增数量：把物品放入指定收纳箱。":op==="remove"?"取出数量：从指定收纳箱扣减。":op==="transfer"?"箱间转移：把数量从一个箱子移动到另一个箱子。":op==="setUseQty"?"设置当前收纳箱中有多少数量正在使用 / 已开封。":"箱间操作";
   };
   $("#f_op").onchange=sync;sync();
@@ -976,17 +1070,17 @@ $("#modalBody").addEventListener("click",e=>{
   if(e.target.id==="modalSubmit"){handleModalSubmit();return}
 });
 
-$("#dashSearch").addEventListener("input",()=>renderDashboard());
-$("#containerFilter").addEventListener("input",renderContainers);
-$("#itemFilter").addEventListener("input",renderItems);
+$("#dashSearch")?.addEventListener("input",()=>renderDashboard());
+$("#containerFilter")?.addEventListener("input",renderContainers);
+$("#itemFilter")?.addEventListener("input",renderItems);
 
 function exportJson(){
   const blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`home-warehouse-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);toast("备份已导出");
 }
 function restoreInput(){ $("#restoreInput").click() }
-$("#backupBtn").onclick=exportJson;$("#backupBtn2").onclick=exportJson;
-$("#restoreBtn").onclick=restoreInput;$("#restoreBtn2").onclick=restoreInput;
+$("#backupBtn")?.addEventListener("click",exportJson);$("#backupBtn2")?.addEventListener("click",exportJson);
+$("#restoreBtn")?.addEventListener("click",restoreInput);$("#restoreBtn2")?.addEventListener("click",restoreInput);
 $("#restoreInput").addEventListener("change",e=>{
   const file=e.target.files[0];if(!file)return;
   const r=new FileReader();
@@ -1000,11 +1094,21 @@ $("#restoreInput").addEventListener("change",e=>{
   };
   r.readAsText(file);e.target.value="";
 });
-$("#resetBtn").onclick=()=>{
+$("#resetBtn")?.addEventListener("click",()=>{
   if(!confirm("确定恢复示例数据吗？当前数据会被覆盖。"))return;
   db=seed();save();renderAll();toast("已恢复示例数据");
-};
+});
 
+$("#lowOnlyBtn")?.addEventListener("click",()=>{
+  lowOnly=true;
+  $("#lowOnlyBtn").classList.add("active");
+  renderItems();
+});
+$("#allItemsBtn")?.addEventListener("click",()=>{
+  lowOnly=false;
+  $("#lowOnlyBtn")?.classList.remove("active");
+  renderItems();
+});
 renderAll();
 })();
 </script>
