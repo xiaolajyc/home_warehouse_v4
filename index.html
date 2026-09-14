@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>家庭仓库 / 收纳箱管理 V18</title>
+<title>家庭仓库 / 收纳箱管理</title>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#18231f;--muted:#66746e;--line:#dbe4df;
@@ -89,6 +89,14 @@ th{font-size:12px;color:var(--muted)}
   .header-actions{justify-content:flex-end}
 }
 </style>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#123d30">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="家庭仓库">
+<link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body>
 
@@ -1211,6 +1219,14 @@ $("#allItemsBtn")?.addEventListener("click",()=>{
 });
 renderAll();
 })();
+</script>
+
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  });
+}
 </script>
 </body>
 </html>
