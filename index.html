@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>家庭仓库 / 收纳箱管理 V18</title>
+<title>家庭仓库 / 收纳箱管理 V25</title>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#18231f;--muted:#66746e;--line:#dbe4df;
@@ -349,6 +349,7 @@ function locationUsed(id){return db.containers.some(c=>c.locationId===id)}
 function containerQty(cid){
   return db.containerItems.filter(x=>x.containerId===cid).reduce((n,x)=>n+(Number(x.quantity)||0),0)
 }
+function hasMinStock(i){return !!(i&&i.minStock!==null&&i.minStock!==undefined&&i.minStock!==""&&Number(i.minStock)>=0);}
 function itemTotal(iid){
   return db.containerItems.filter(x=>x.itemId===iid).reduce((n,x)=>n+(Number(x.quantity)||0),0)
 }
@@ -387,7 +388,7 @@ function renderDashboard(){
   const emptyContainers=activeContainers.filter(c=>
     !db.containerItems.some(x=>x.containerId===c.id && Number(x.quantity)>0)
   );
-  const low=db.items.filter(i=>hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock));
+  const low=db.items.filter(i=>Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock));
 
   $("#metrics").innerHTML=[
     ["收纳箱",activeContainers.length,`${emptyContainers.length} 个空箱`],
@@ -420,7 +421,7 @@ function renderLowStock(){
     const min=Math.max(0,Math.round(Number(i.minStock)||0));
     const need=Math.max(0,min-total);
     return {i,total,min,need,out:total<=0};
-  }).filter(x=>hasMinStock(x.i)&&x.total<x.min)
+  }).filter(x=>x.min>0&&x.total<x.min)
     .sort((a,b)=>Number(b.out)-Number(a.out)||b.need-a.need||a.i.name.localeCompare(b.i.name));
 
   const summary=$("#lowStockSummary"),box=$("#lowStockItems");
@@ -550,7 +551,7 @@ function renderItems(){
   const q=$("#itemFilter").value.trim().toLowerCase();
   const rows=db.items.filter(i=>{
     const textOk=!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q);
-    const lowOk=!lowOnly|| (hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock));
+    const lowOk=!lowOnly|| (Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock));
     return textOk&&lowOk;
   }).sort((a,b)=>{
       const au=itemContainers(a.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
@@ -559,7 +560,7 @@ function renderItems(){
     });
   $("#itemList").innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>物品</th><th>总数量</th><th>所在收纳箱</th><th>标签</th><th>操作</th></tr></thead><tbody>${rows.map(i=>{
     const cs=itemContainers(i.id).filter(x=>Number(x.quantity)>0);
-    const low=hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock);
+    const low=Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock);
     return `<tr><td><b>${esc(i.name)}</b><br><span class="muted">${esc(i.variant||"无规格")} · ${esc(i.unit||"")}</span></td>
       <td>${esc(itemTotal(i.id))} ${esc(i.unit||"")}${low?`<br><span class="badge danger">⚠ 低库存 · 最低 ${esc(i.minStock)} ${esc(i.unit||"")}</span>`:""}</td>
       <td>${cs.length?cs.map(x=>{
@@ -647,7 +648,7 @@ function openItem(id=null){
     <label>物品名称<input id="f_name" value="${esc(i?.name||"")}" placeholder="例如：电钻" required></label>
     <label>规格 / Variant<input id="f_variant" value="${esc(i?.variant||"")}" placeholder="例如：18V / 黑色 / 2m"></label>
     <label>单位<input id="f_unit" value="${esc(i?.unit||"件")}" placeholder="件 / 个 / 套 / 包"></label>
-    <label>最低库存（留空=不管理；0=库存为0时提醒）<input id="f_min" type="number" min="0" step="1" value="${hasMinStock(i)?Number(i.minStock):""}"></label>
+    <label>最低库存（可选）<input id="f_min" type="number" min="0" step="1" value="${Number(i?.minStock)||0}"></label>
     ${i?"":
       `<label>直接放入收纳箱<select id="f_container"><option value="">暂不入箱</option>${optionsContainers(defaultContainer)}</select></label>
        <label>入箱数量<input id="f_initialQty" type="number" min="0" step="1" value="1" inputmode="numeric"></label>
@@ -659,7 +660,7 @@ function openItem(id=null){
     ${modalFormButtons(i?"保存修改":"创建物品")}
   `,()=>{
     const name=$("#f_name").value.trim();if(!name)throw Error("请输入物品名称");
-    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:(($("#f_min").value||"").trim()===""?null:Math.max(0,Math.round(Number($("#f_min").value)))),
+    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:Math.max(0,Math.round(Number($("#f_min").value)||0)),
       tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),notes:$("#f_notes").value.trim()};
 
     if(i){
@@ -760,17 +761,17 @@ function openBatchAddToContainer(containerId){
   openModal(`批量新增物品 · ${c.name}`,`
     <div class="notice">每行一个物品。支持直接复制粘贴，例如：<br>胶带 3<br>垃圾袋\t10<br>螺丝 × 20<br>也可以使用“物品名称,数量”。</div>
     <label>物品清单<textarea id="batchText" rows="12" placeholder="胶带 3\n垃圾袋 10\n螺丝 × 20"></textarea></label>
-    <label>默认最低库存（留空=不管理；0=库存为0时提醒）<input id="batchMin" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
+    <label>默认最低库存（可选）<input id="batchMin" type="number" min="0" step="1" value="" inputmode="numeric"></label>
     ${modalFormButtons("批量新增")}
   `,()=>{
-    const parsed=parseBatchItems($("#batchText").value),min=Math.max(0,Math.round(Number($("#batchMin").value)||0));
+    const parsed=parseBatchItems($("#batchText").value),rawMin=$("#batchMin").value.trim(),min=rawMin===""?null:Math.max(0,Math.round(Number(rawMin)));
     if(!parsed.length)throw Error("请粘贴物品清单");
     let added=0;
     parsed.forEach(r=>{
       if(!r.name||r.qty<=0)return;
       let i=db.items.find(x=>x.name.trim().toLowerCase()===r.name.trim().toLowerCase());
       if(!i){i={id:uid("it"),name:r.name,variant:"",unit:"件",minStock:min,tags:[],notes:"",createdAt:iso()};db.items.push(i);log("MASTER","批量新增物品",{itemId:i.id,containerId,quantity:r.qty,unit:i.unit,notes:"批量粘贴导入"});}
-      else if(min>0&&!hasMinStock(i))i.minStock=min;
+      else if(min>0&&!Number(i.minStock))i.minStock=min;
       let row=db.containerItems.find(x=>x.containerId===containerId&&x.itemId===i.id);
       if(!row){row={id:uid("ci"),containerId,itemId:i.id,quantity:0,unit:i.unit,notes:""};db.containerItems.push(row)}
       row.quantity+=Math.round(r.qty);row.updatedAt=iso();added+=Math.round(r.qty);
@@ -793,7 +794,7 @@ function openContainerBatchOperation(containerId){
     const ids=[...$$('.batchOpCheck:checked')].map(x=>x.value),op=$("#batchOp").value,to=$("#batchTarget")?.value;
     if(!ids.length)throw Error("请至少选择一项物品");
     if(op==="move"&&(!to||to===containerId))throw Error("请选择其他目标收纳箱");
-    ids.forEach(rid=>{const row=db.containerItems.find(x=>x.id===rid&&x.containerId===containerId);if(!row)return;const i=item(row.itemId);if(op==="removeAll"){const removedQty=Number(row.quantity)||0;log("REMOVE_ITEM","批量取出物品",{containerId,itemId:row.itemId,quantity:removedQty,unit:i?.unit});db.containerItems=db.containerItems.filter(x=>x.id!==rid);if(i&&itemTotal(row.itemId)<=0&&!hasMinStock(i)){db.items=db.items.filter(x=>x.id!==row.itemId);db.containerItems=db.containerItems.filter(x=>x.itemId!==row.itemId);log("MASTER","库存归零自动删除物品",{itemId:row.itemId,notes:`${i.name} 无最低库存要求，批量取出后库存归零`})}}else if(op==="clearUse"){row.inUseQty=0;row.updatedAt=iso()}else if(op==="setUseAll"){row.inUseQty=Math.min(1,Number(row.quantity)||0);row.updatedAt=iso();log("USAGE_STATUS","批量标记正在使用 / 已开封",{containerId,itemId:row.itemId,quantity:row.inUseQty,unit:i?.unit,notes:"批量操作默认标记 1 个"})}else if(op==="move"){let dst=db.containerItems.find(x=>x.containerId===to&&x.itemId===row.itemId);if(!dst){dst={id:uid("ci"),containerId:to,itemId:row.itemId,quantity:0,unit:row.unit,notes:""};db.containerItems.push(dst)}dst.quantity+=row.quantity;dst.inUseQty=Number(dst.inUseQty||0)+Number(row.inUseQty||0);db.containerItems=db.containerItems.filter(x=>x.id!==rid)}});
+    ids.forEach(rid=>{const row=db.containerItems.find(x=>x.id===rid&&x.containerId===containerId);if(!row)return;const i=item(row.itemId);if(op==="removeAll"){const removedQty=Number(row.quantity)||0;log("REMOVE_ITEM","批量取出物品",{containerId,itemId:row.itemId,quantity:removedQty,unit:i?.unit});db.containerItems=db.containerItems.filter(x=>x.id!==rid);if(i&&itemTotal(row.itemId)<=0&&Number(i.minStock||0)<=0){db.items=db.items.filter(x=>x.id!==row.itemId);db.containerItems=db.containerItems.filter(x=>x.itemId!==row.itemId);log("MASTER","库存归零自动删除物品",{itemId:row.itemId,notes:`${i.name} 无最低库存要求，批量取出后库存归零`})}}else if(op==="clearUse"){row.inUseQty=0;row.updatedAt=iso()}else if(op==="setUseAll"){row.inUseQty=Math.min(1,Number(row.quantity)||0);row.updatedAt=iso();log("USAGE_STATUS","批量标记正在使用 / 已开封",{containerId,itemId:row.itemId,quantity:row.inUseQty,unit:i?.unit,notes:"批量操作默认标记 1 个"})}else if(op==="move"){let dst=db.containerItems.find(x=>x.containerId===to&&x.itemId===row.itemId);if(!dst){dst={id:uid("ci"),containerId:to,itemId:row.itemId,quantity:0,unit:row.unit,notes:""};db.containerItems.push(dst)}dst.quantity+=row.quantity;dst.inUseQty=Math.min(dst.quantity,Number(dst.inUseQty||0)+Number(row.inUseQty||0));db.containerItems=db.containerItems.filter(x=>x.id!==rid)}});
     if(!containerItems(containerId).some(x=>Number(x.quantity)>0))c.status="EMPTY";
     if(op==="move")container(to).status="ACTIVE";
     closeModal();renderAll();toast(`已完成 ${ids.length} 项批量操作`);
@@ -991,27 +992,27 @@ function openItemOperation(id){
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
     <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
-    <label id="inUseWrap">正在使用 / 已开封数量<input id="f_useQty" type="number" min="0" step="0.01" value="0"></label>
+    <label id="inUseWrap">正在使用 / 已开封数量<input id="f_useQty" type="number" min="0" step="1" value="0"></label>
     <div id="operationHelp" class="notice">新增数量：把物品放入指定收纳箱。</div>
     ${modalFormButtons("执行操作")}
   `,()=>{
-    const op=$("#f_op").value,cid=$("#f_container").value,to=$("#f_to").value,qty=Math.max(0,Math.round(Number($("#f_qty").value)||0)),markInUse=$("#f_inUse")?.checked===true;
+    const op=$("#f_op").value,cid=$("#f_container").value,to=$("#f_to").value,qty=Math.max(0,Math.round(Number($("#f_qty").value)||0));
     if(!cid)throw Error("请选择收纳箱"); if(op!=="setUseQty"&&(!Number.isFinite(qty)||qty<=0))throw Error("请填写有效数量");
     let row=db.containerItems.find(x=>x.containerId===cid&&x.itemId===id);
     if(op==="add"){
       if(!row){row={id:uid("ci"),containerId:cid,itemId:id,quantity:0,unit:i.unit,notes:""};db.containerItems.push(row)}
       const before=row.quantity;row.quantity+=qty;row.updatedAt=iso();
-      if(markInUse)row.inUseQty=true;
       const c=container(cid);c.status="ACTIVE";
       log("ADD_ITEM","新增物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()||`前 ${before}，后 ${row.quantity}`});
-      if(markInUse)log("USAGE_STATUS","标记为正在使用 / 已开封",{containerId:cid,itemId:id,quantity:row.quantity,unit:i.unit,notes:"优先使用"});
     }else if(op==="remove"){
       if(!row||row.quantity<qty)throw Error(`该收纳箱中的库存不足。当前为 ${row?.quantity||0} ${i.unit||""}`);
-      row.quantity-=qty;
+      const takeFromUse=Math.min(Number(row.inUseQty)||0,qty);
+      row.inUseQty=Math.max(0,(Number(row.inUseQty)||0)-takeFromUse);
+      row.quantity-=qty;row.updatedAt=iso();
       log("REMOVE_ITEM","取出物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()});
       if(row.quantity===0)db.containerItems=db.containerItems.filter(x=>x.id!==row.id);
       if(!containerItems(cid).some(x=>Number(x.quantity)>0))container(cid).status="EMPTY";
-      if(itemTotal(id)<=0 && !hasMinStock(i)){
+      if(itemTotal(id)<=0 && Number(i.minStock||0)<=0){
         db.items=db.items.filter(x=>x.id!==id);
         db.containerItems=db.containerItems.filter(x=>x.itemId!==id);
         log("MASTER","库存归零自动删除物品",{itemId:id,notes:`${i.name} 无最低库存要求，库存已全部取出`});
@@ -1042,8 +1043,8 @@ function openItemOperation(id){
     $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
     if($("#inUseWrap"))$("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
     if(op==="remove"||op==="setUseQty"){
-      const selected=$("#f_container").value;
-      $("#f_container").innerHTML=operationContainerOptions(id,selected);
+      const current=$("#f_container").value;
+      $("#f_container").innerHTML=operationContainerOptions(id,op==="remove" ? "" : current);
       if(!$("#f_container").value){
         $("#f_container").innerHTML='<option value="">没有库存可取用的收纳箱</option>';
       }
