@@ -130,7 +130,7 @@ th{font-size:12px;color:var(--muted)}
         <div class="low-stock-head">
           <div>
             <h3 style="margin:0">⚠️ 低库存 / 需要补充</h3>
-            <div class="muted" style="margin-top:4px">库存低于最低库存就会进入补货清单；当前为 0 的物品会优先显示。</div>
+            <div class="muted" style="margin-top:4px">库存低于最低库存会进入补货清单；最低库存填 0 时，库存归零会提醒；留空则不管理补货。</div>
           </div>
           <div id="lowStockSummary" class="low-stock-summary"></div>
         </div>
@@ -388,7 +388,7 @@ function renderDashboard(){
   const emptyContainers=activeContainers.filter(c=>
     !db.containerItems.some(x=>x.containerId===c.id && Number(x.quantity)>0)
   );
-  const low=db.items.filter(i=>Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock));
+  const low=db.items.filter(i=>hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock));
 
   $("#metrics").innerHTML=[
     ["收纳箱",activeContainers.length,`${emptyContainers.length} 个空箱`],
@@ -551,7 +551,7 @@ function renderItems(){
   const q=$("#itemFilter").value.trim().toLowerCase();
   const rows=db.items.filter(i=>{
     const textOk=!q||matchText(i.name,i.variant,i.unit,tagsOf(i.tags).join(" "),i.notes).includes(q);
-    const lowOk=!lowOnly|| (Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock));
+    const lowOk=!lowOnly|| (hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock));
     return textOk&&lowOk;
   }).sort((a,b)=>{
       const au=itemContainers(a.id).some(x=>Number(x.quantity)>0&&Number(x.inUseQty)>0);
@@ -560,7 +560,7 @@ function renderItems(){
     });
   $("#itemList").innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>物品</th><th>总数量</th><th>所在收纳箱</th><th>标签</th><th>操作</th></tr></thead><tbody>${rows.map(i=>{
     const cs=itemContainers(i.id).filter(x=>Number(x.quantity)>0);
-    const low=Number(i.minStock)>0&&itemTotal(i.id)<Number(i.minStock);
+    const low=hasMinStock(i)&&itemTotal(i.id)<Number(i.minStock);
     return `<tr><td><b>${esc(i.name)}</b><br><span class="muted">${esc(i.variant||"无规格")} · ${esc(i.unit||"")}</span></td>
       <td>${esc(itemTotal(i.id))} ${esc(i.unit||"")}${low?`<br><span class="badge danger">⚠ 低库存 · 最低 ${esc(i.minStock)} ${esc(i.unit||"")}</span>`:""}</td>
       <td>${cs.length?cs.map(x=>{
@@ -660,7 +660,7 @@ function openItem(id=null){
     ${modalFormButtons(i?"保存修改":"创建物品")}
   `,()=>{
     const name=$("#f_name").value.trim();if(!name)throw Error("请输入物品名称");
-    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:Math.max(0,Math.round(Number($("#f_min").value)||0)),
+    const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:(($("#f_min").value||"").trim()===""?null:Math.max(0,Math.round(Number($("#f_min").value)))),
       tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),notes:$("#f_notes").value.trim()};
 
     if(i){
@@ -761,7 +761,7 @@ function openBatchAddToContainer(containerId){
   openModal(`批量新增物品 · ${c.name}`,`
     <div class="notice">每行一个物品。支持直接复制粘贴，例如：<br>胶带 3<br>垃圾袋\t10<br>螺丝 × 20<br>也可以使用“物品名称,数量”。</div>
     <label>物品清单<textarea id="batchText" rows="12" placeholder="胶带 3\n垃圾袋 10\n螺丝 × 20"></textarea></label>
-    <label>默认最低库存（可选）<input id="batchMin" type="number" min="0" step="1" value="" inputmode="numeric"></label>
+    <label>默认最低库存（留空=不管理；0=库存为0时提醒）<input id="batchMin" type="number" min="0" step="1" value="" inputmode="numeric"></label>
     ${modalFormButtons("批量新增")}
   `,()=>{
     const parsed=parseBatchItems($("#batchText").value),rawMin=$("#batchMin").value.trim(),min=rawMin===""?null:Math.max(0,Math.round(Number(rawMin)));
