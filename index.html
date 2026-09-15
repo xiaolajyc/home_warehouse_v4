@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>家庭仓库 / 收纳箱管理</title>
+<title>家庭仓库 / 收纳箱管理 V28</title>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#18231f;--muted:#66746e;--line:#dbe4df;
@@ -62,7 +62,6 @@ label{display:block;font-size:13px;font-weight:650;margin:11px 0 5px}
 table{width:100%;min-width:760px;border-collapse:collapse}
 th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:normal;word-break:normal;overflow-wrap:break-word}
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.history-card,.history-card *{writing-mode:horizontal-tb;}
 th{font-size:12px;color:var(--muted)}
 .tree{margin:0;padding-left:18px}.tree li{margin:5px 0}
 .location-node{padding:7px;border-radius:8px;cursor:pointer}.location-node:hover{background:#f0f6f3}
@@ -91,23 +90,102 @@ th{font-size:12px;color:var(--muted)}
   .header-actions{justify-content:flex-end}
 }
 
-.history-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-.history-main{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
-.history-type{min-width:0;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.history-type b{font-size:13px;white-space:nowrap}
-.history-type span{font-size:14px;white-space:normal;word-break:keep-all;overflow-wrap:break-word}
-.history-main time{flex:0 0 auto;font-size:11px;color:var(--muted);white-space:nowrap}
-.history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 12px;padding-top:10px}
-.history-field{min-width:0;display:flex;align-items:baseline;gap:7px;line-height:1.4}
-.history-field>span{flex:0 0 auto;font-size:11px;color:var(--muted);white-space:nowrap}
-.history-field>b{display:block;min-width:0;font-size:13px;font-weight:600;white-space:normal;word-break:keep-all;overflow-wrap:break-word}
-.history-notes{grid-column:1/-1}
+
+.history-list,
+.history-list *{
+  writing-mode:horizontal-tb!important;
+  text-orientation:mixed!important;
+}
+.history-card{
+  display:block!important;
+  width:100%!important;
+  box-sizing:border-box;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:12px;
+  margin-bottom:10px;
+  box-shadow:0 1px 2px rgba(0,0,0,.03);
+  overflow:hidden;
+}
+.history-main{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  padding-bottom:10px;
+  border-bottom:1px solid var(--line);
+}
+.history-type{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:baseline;
+  gap:8px;
+  flex-wrap:wrap;
+  min-width:0;
+}
+.history-type b{
+  display:inline-block!important;
+  font-size:13px;
+  white-space:nowrap!important;
+}
+.history-type span{
+  display:inline!important;
+  font-size:14px;
+  white-space:normal!important;
+  word-break:keep-all!important;
+  overflow-wrap:break-word!important;
+}
+.history-main time{
+  display:block!important;
+  flex:0 0 auto;
+  font-size:11px;
+  color:var(--muted);
+  white-space:nowrap!important;
+}
+.history-grid{
+  display:block!important;
+  width:100%!important;
+  padding-top:10px;
+}
+.history-field{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:flex-start;
+  width:100%!important;
+  min-width:0;
+  gap:8px;
+  margin:0 0 7px;
+  line-height:1.45;
+}
+.history-field>span{
+  display:block!important;
+  flex:0 0 52px;
+  width:52px;
+  font-size:11px;
+  color:var(--muted);
+  white-space:nowrap!important;
+}
+.history-field>b{
+  display:block!important;
+  flex:1 1 auto;
+  min-width:0;
+  font-size:13px;
+  font-weight:600;
+  white-space:normal!important;
+  word-break:keep-all!important;
+  overflow-wrap:break-word!important;
+}
+.history-notes{
+  display:flex!important;
+}
 @media(max-width:560px){
-  .history-grid{grid-template-columns:1fr}
+  .history-card{padding:12px}
   .history-main{gap:8px}
   .history-main time{font-size:10px}
   .history-field{gap:8px}
-  .history-field>b{word-break:keep-all;overflow-wrap:break-word}
+  .history-field>span{flex-basis:52px;width:52px}
 }
 </style>
 
@@ -232,7 +310,7 @@ th{font-size:12px;color:var(--muted)}
           <h2 class="section-title">操作流水</h2>
           <span class="muted">库存变更与整箱移动都会记录</span>
         </div>
-        <div id="historyList" class="table-wrap"></div>
+        <div id="historyList" class="history-list"></div>
       </div>
     </section>
 
@@ -1256,7 +1334,7 @@ renderAll();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=28").catch(() => {});
   });
 }
 </script>
