@@ -58,9 +58,10 @@ label{display:block;font-size:13px;font-weight:650;margin:11px 0 5px}
 
 .actions{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap;margin-top:9px}
 .empty{padding:28px;text-align:center;color:var(--muted)}
-.table-wrap{width:100%;max-width:100%;min-width:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
-table{width:max-content;min-width:1000px;border-collapse:collapse}
-th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap;word-break:keep-all;overflow-wrap:normal}
+.table-wrap{overflow:auto}
+table{width:100%;min-width:760px;border-collapse:collapse}
+th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:normal;word-break:normal;overflow-wrap:break-word}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 th{font-size:12px;color:var(--muted)}
 .tree{margin:0;padding-left:18px}.tree li{margin:5px 0}
 .location-node{padding:7px;border-radius:8px;cursor:pointer}.location-node:hover{background:#f0f6f3}
@@ -88,6 +89,19 @@ th{font-size:12px;color:var(--muted)}
   .header{padding:12px}
   .header-actions{justify-content:flex-end}
 }
+
+.history-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.history-main{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.history-type{min-width:0;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.history-type b{font-size:13px;white-space:nowrap}
+.history-type span{font-size:14px;overflow-wrap:anywhere}
+.history-main time{flex:0 0 auto;font-size:11px;color:var(--muted);white-space:nowrap}
+.history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 12px;padding-top:10px}
+.history-field{min-width:0;display:flex;align-items:baseline;gap:7px;line-height:1.4}
+.history-field>span{flex:0 0 auto;font-size:11px;color:var(--muted)}
+.history-field>b{min-width:0;font-size:13px;font-weight:600;overflow-wrap:anywhere;word-break:normal}
+.history-notes{grid-column:1/-1}
+@media(max-width:560px){.history-grid{grid-template-columns:1fr}.history-main{gap:8px}.history-main time{font-size:10px}.history-field{gap:8px}}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -612,11 +626,22 @@ function renderLocations(){
 
 function renderHistory(){
   const rows=db.transactions.slice(0,300);
-  $("#historyList").innerHTML=rows.length?`<table><thead><tr><th>时间</th><th>操作</th><th>物品</th><th>收纳箱</th><th>数量</th><th>位置变化</th><th>备注</th></tr></thead><tbody>${rows.map(t=>{
+  $("#historyList").innerHTML=rows.length?rows.map(t=>{
     const i=t.itemId?item(t.itemId):null,c=t.containerId?container(t.containerId):null;
     const src=t.sourceLocationId?locationPath(t.sourceLocationId):"",dst=t.targetLocationId?locationPath(t.targetLocationId):"";
-    return `<tr><td>${esc(fmtTime(t.time))}</td><td><b>${esc(t.type)}</b><br>${esc(t.label)}</td><td>${esc(i?.name||"—")}</td><td>${esc(c?.name||"—")}</td><td>${t.quantity==null?"—":esc(t.quantity)} ${esc(t.unit||"")}</td><td>${src||dst?(src?esc(src):"—")+" → "+(dst?esc(dst):"—"):"—"}</td><td>${esc(t.notes||"")}</td></tr>`
-  }).join("")}</tbody></table>`:'<div class="empty">暂无操作流水</div>';
+    const pos=(src||dst)?((src?esc(src):"—")+" → "+(dst?esc(dst):"—")):"—";
+    const qty=t.quantity==null?"—":`${esc(t.quantity)} ${esc(t.unit||"")}`.trim();
+    return `<div class="history-card">
+      <div class="history-main"><div class="history-type"><b>${esc(t.type)}</b><span>${esc(t.label)}</span></div><time>${esc(fmtTime(t.time))}</time></div>
+      <div class="history-grid">
+        <div class="history-field"><span>物品</span><b>${esc(i?.name||"—")}</b></div>
+        <div class="history-field"><span>收纳箱</span><b>${esc(c?.name||"—")}</b></div>
+        <div class="history-field"><span>数量</span><b>${qty}</b></div>
+        <div class="history-field"><span>位置变化</span><b>${pos}</b></div>
+        ${t.notes?`<div class="history-field history-notes"><span>备注</span><b>${esc(t.notes)}</b></div>`:""}
+      </div>
+    </div>`
+  }).join(""):'<div class="empty">暂无操作流水</div>';
 }
 
 function openModal(title,body,submitFn){
