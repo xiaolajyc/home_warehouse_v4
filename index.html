@@ -37,6 +37,11 @@ label{display:block;font-size:13px;font-weight:650;margin:11px 0 5px}
 .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.spread{justify-content:space-between}
 .section-title{font-size:19px;margin:0 0 12px}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.sync-badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;background:#eef2f0;color:var(--muted);font-size:12px;font-weight:700}
+.sync-badge.ok{background:#e7f3ed;color:#176b4c}.sync-badge.warn{background:#fff4df;color:#9b6200}.sync-badge.err{background:#fbecee;color:#b62f3b}
+.sync-meta{font-size:13px;color:var(--muted);padding:9px 11px;background:#f7faf8;border-radius:9px;margin:8px 0}
+.sync-check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500}.sync-check input{width:auto}
+
 .toolbar input{max-width:360px}
 .list{display:grid;gap:9px}.item{background:#fff;border:1px solid var(--line);border-radius:11px;padding:12px}
 .badge{display:inline-block;background:#eef5f1;color:#31584a;border-radius:999px;padding:3px 8px;font-size:12px;margin:2px 4px 2px 0}
@@ -196,6 +201,7 @@ th{font-size:12px;color:var(--muted)}
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="家庭仓库">
 <link rel="apple-touch-icon" href="icon-192.png">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -322,6 +328,24 @@ th{font-size:12px;color:var(--muted)}
           <strong>V29</strong>
         </div>
       </div>
+      <div class="card sync-card" style="margin-bottom:14px">
+        <div class="row spread">
+          <h3 style="margin:0">Google Drive 云同步</h3>
+          <span id="syncStatusBadge" class="sync-badge">未连接</span>
+        </div>
+        <p id="syncStatusText" class="muted">连接 Google Drive 后，可在手机、电脑等设备之间同步仓库数据。</p>
+        <div class="sync-meta" id="syncMetaText">云端文件：未关联</div>
+        <div class="actions">
+          <button type="button" id="driveConnectBtn">连接 Google Drive</button>
+          <button type="button" class="secondary" id="driveDisconnectBtn">断开</button>
+        </div>
+        <div class="actions">
+          <button type="button" id="driveSyncBtn">☁️ 上传/同步</button>
+          <button type="button" class="secondary" id="driveRestoreBtn">⬇️ 从云端恢复</button>
+        </div>
+        <label class="sync-check"><input id="driveAutoSync" type="checkbox"> 数据修改后自动同步</label>
+        <div id="driveHint" class="muted">同步文件只保存本应用的仓库 JSON 数据；不会上传其他 Drive 文件。</div>
+      </div>
       <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
         <div class="card">
           <h3>数据</h3>
@@ -447,7 +471,167 @@ function load(){
     return x;
   }catch(e){ return seed(); }
 }
-function save(){localStorage.setItem(KEY,JSON.stringify(db))}
+const SYNC_KEY = "home-warehouse-drive-sync-v1";
+const DRIVE_CLIENT_ID = "801960562511-e0uq3cn1hcutj91g3gesqvsulpj3biv9.apps.googleusercontent.com";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_FILE_NAME = "home-warehouse-sync.json";
+let driveTokenClient = null;
+let driveAccessToken = "";
+let driveTokenExpiresAt = 0;
+let driveSyncTimer = null;
+let driveSyncBusy = false;
+let driveGisReady = false;
+let suppressAutoSync = false;
+let syncMeta = loadSyncMeta();
+
+function loadSyncMeta(){
+  try{return JSON.parse(localStorage.getItem(SYNC_KEY)||"null")||{connected:false,fileId:"",lastSyncAt:"",lastCloudModifiedTime:"",autoSync:false}}catch(e){return {connected:false,fileId:"",lastSyncAt:"",lastCloudModifiedTime:"",autoSync:false}}
+}
+function saveSyncMeta(){localStorage.setItem(SYNC_KEY,JSON.stringify(syncMeta))}
+function updateSyncUI(message){
+  const badge=$("#syncStatusBadge"), text=$("#syncStatusText"), meta=$("#syncMetaText"), auto=$("#driveAutoSync");
+  if(!badge)return;
+  badge.className="sync-badge";
+  if(driveSyncBusy){badge.textContent="同步中…";badge.classList.add("warn")}
+  else if(syncMeta.connected){badge.textContent="已连接";badge.classList.add("ok")}
+  else badge.textContent="未连接";
+  text.textContent=message || (syncMeta.connected?`Google Drive 已连接${syncMeta.lastSyncAt?` · 最近同步：${fmtTime(syncMeta.lastSyncAt)}`:""}`:"连接 Google Drive 后，可在手机、电脑等设备之间同步仓库数据。");
+  meta.textContent=syncMeta.fileId?`云端文件：已关联 · 最后云端更新时间：${syncMeta.lastCloudModifiedTime?fmtTime(syncMeta.lastCloudModifiedTime):"未知"}`:"云端文件：未关联";
+  if(auto)auto.checked=!!syncMeta.autoSync;
+}
+function gisInit(){
+  if(!window.google?.accounts?.oauth2)return false;
+  if(driveTokenClient)return true;
+  driveTokenClient=google.accounts.oauth2.initTokenClient({
+    client_id:DRIVE_CLIENT_ID,scope:DRIVE_SCOPE,callback:()=>{}
+  });
+  driveGisReady=true;return true;
+}
+function requestDriveToken(interactive=false){
+  return new Promise((resolve,reject)=>{
+    if(!gisInit()){reject(new Error("Google 登录组件尚未加载，请稍后再试。"));return}
+    driveTokenClient.callback=(resp)=>{
+      if(resp?.error){reject(new Error(resp.error_description||resp.error));return}
+      driveAccessToken=resp.access_token||"";
+      driveTokenExpiresAt=Date.now()+(Number(resp.expires_in||3600)*1000)-60000;
+      resolve(driveAccessToken);
+    };
+    driveTokenClient.requestAccessToken({prompt:interactive?"":"none"});
+  });
+}
+async function ensureDriveToken(interactive=false){
+  if(driveAccessToken && Date.now()<driveTokenExpiresAt)return driveAccessToken;
+  return requestDriveToken(interactive);
+}
+async function driveFetch(url,options={},interactive=false){
+  let token=await ensureDriveToken(interactive);
+  let res=await fetch(url,{...options,headers:{...(options.headers||{}),Authorization:`Bearer ${token}`}});
+  if(res.status===401){driveAccessToken="";token=await ensureDriveToken(interactive);res=await fetch(url,{...options,headers:{...(options.headers||{}),Authorization:`Bearer ${token}`}})}
+  if(!res.ok){let msg=`Google Drive 请求失败：${res.status}`;try{const e=await res.json();msg=e.error?.message||msg}catch(_){}throw new Error(msg)}
+  return res;
+}
+async function findDriveFile(){
+  const q=encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+  const res=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=10`);
+  const data=await res.json();return data.files?.[0]||null;
+}
+function syncPayload(){
+  return {schema:1,app:"home-warehouse",updatedAt:iso(),deviceId:getDeviceId(),data:db};
+}
+function getDeviceId(){
+  const k="home-warehouse-device-id";let v=localStorage.getItem(k);if(v)return v;v=uid("device");localStorage.setItem(k,v);return v;
+}
+async function createDriveFile(payload){
+  const boundary="----homeWarehouseBoundary"+Math.random().toString(16).slice(2);
+  const body=new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+    JSON.stringify({name:DRIVE_FILE_NAME,mimeType:"application/json"}),
+    `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
+    JSON.stringify(payload),`\r\n--${boundary}--`
+  ]);
+  const res=await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime",{method:"POST",headers:{"Content-Type":`multipart/related; boundary=${boundary}`},body},true);
+  return res.json();
+}
+async function updateDriveFile(fileId,payload){
+  const res=await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},true);
+  return res.json();
+}
+async function readDriveFile(fileId){
+  const res=await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,{},true);return res.json();
+}
+function validateCloudPayload(x){
+  const d=x?.data;
+  return !!(x&&x.schema===1&&x.app==="home-warehouse"&&d&&d.version===1&&Array.isArray(d.locations)&&Array.isArray(d.containers)&&Array.isArray(d.items)&&Array.isArray(d.containerItems));
+}
+function applyCloudData(cloud){
+  suppressAutoSync=true;
+  try{
+    db=cloud.data;normalizeDb();localStorage.setItem(KEY,JSON.stringify(db));
+  }finally{suppressAutoSync=false}
+  renderAll();
+}
+function normalizeDb(){
+  if(!db||db.version!==1)return;
+  db.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});
+  db.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));if(!ci.updatedAt)ci.updatedAt=iso()});
+  if(!Array.isArray(db.transactions))db.transactions=[];if(!Array.isArray(db.locations))db.locations=[];if(!Array.isArray(db.containers))db.containers=[];if(!Array.isArray(db.items))db.items=[];if(!Array.isArray(db.containerItems))db.containerItems=[];
+}
+async function connectDrive(){
+  driveSyncBusy=true;updateSyncUI("正在连接 Google Drive…");
+  try{
+    await ensureDriveToken(true);
+    syncMeta.connected=true;
+    const f=await findDriveFile();
+    if(f){syncMeta.fileId=f.id;syncMeta.lastCloudModifiedTime=f.modifiedTime||"";updateSyncUI("已连接。发现已有云端仓库数据，可选择“从云端恢复”。");}
+    else {syncMeta.fileId="";syncMeta.lastCloudModifiedTime="";updateSyncUI("已连接。当前账号还没有仓库云端文件，点击“上传/同步”即可创建。")}
+    saveSyncMeta();
+  }catch(e){syncMeta.connected=false;saveSyncMeta();updateSyncUI(`连接失败：${e.message}`);alert(e.message)}
+  finally{driveSyncBusy=false;updateSyncUI()}
+}
+async function uploadOrSyncDrive(interactive=true){
+  if(driveSyncBusy)return;
+  driveSyncBusy=true;updateSyncUI("正在同步到 Google Drive…");
+  try{
+    await ensureDriveToken(interactive);
+    let f=syncMeta.fileId?{id:syncMeta.fileId,modifiedTime:syncMeta.lastCloudModifiedTime}:await findDriveFile();
+    if(!f)f=await findDriveFile();
+    const payload=syncPayload();
+    let result;
+    if(f?.id){
+      result=await updateDriveFile(f.id,payload);
+    }else{
+      result=await createDriveFile(payload);
+      syncMeta.fileId=result.id;
+    }
+    syncMeta.connected=true;syncMeta.lastSyncAt=iso();syncMeta.lastCloudModifiedTime=result.modifiedTime||iso();saveSyncMeta();
+    updateSyncUI("同步完成");toast("Google Drive 同步完成");
+  }catch(e){updateSyncUI(`同步失败：${e.message}`);if(interactive)alert(e.message)}
+  finally{driveSyncBusy=false;updateSyncUI()}
+}
+async function restoreFromDrive(interactive=true){
+  if(driveSyncBusy)return;
+  driveSyncBusy=true;updateSyncUI("正在从 Google Drive 读取…");
+  try{
+    await ensureDriveToken(interactive);
+    let f=syncMeta.fileId?{id:syncMeta.fileId,modifiedTime:syncMeta.lastCloudModifiedTime}:await findDriveFile();
+    if(!f){f=await findDriveFile()}
+    if(!f){alert("当前 Google Drive 没有仓库同步文件，请先在已有设备上传/同步一次。");return}
+    const cloud=await readDriveFile(f.id);
+    if(!validateCloudPayload(cloud))throw new Error("云端仓库文件格式不正确，未恢复本地数据。");
+    if(!confirm("从云端恢复会覆盖本设备当前仓库数据，确定继续吗？"))return;
+    applyCloudData(cloud);syncMeta.connected=true;syncMeta.fileId=f.id;syncMeta.lastSyncAt=iso();syncMeta.lastCloudModifiedTime=f.modifiedTime||cloud.updatedAt||"";saveSyncMeta();updateSyncUI("云端数据已恢复到本设备");toast("已从 Google Drive 恢复");
+  }catch(e){updateSyncUI(`恢复失败：${e.message}`);if(interactive)alert(e.message)}
+  finally{driveSyncBusy=false;updateSyncUI()}
+}
+function scheduleDriveAutoSync(){
+  if(suppressAutoSync||!syncMeta.connected||!syncMeta.autoSync)return;
+  clearTimeout(driveSyncTimer);driveSyncTimer=setTimeout(()=>uploadOrSyncDrive(false),1200);
+}
+function disconnectDrive(){
+  driveAccessToken="";driveTokenExpiresAt=0;syncMeta={connected:false,fileId:"",lastSyncAt:syncMeta.lastSyncAt||"",lastCloudModifiedTime:"",autoSync:false};saveSyncMeta();updateSyncUI("已断开 Google Drive。浏览器本地数据不会被删除。");toast("已断开 Google Drive");
+}
+
+function save(){localStorage.setItem(KEY,JSON.stringify(db));scheduleDriveAutoSync()}
 db=load();
 
 function location(id){return db.locations.find(x=>x.id===id)}
@@ -1335,13 +1519,21 @@ $("#allItemsBtn")?.addEventListener("click",()=>{
   renderItems();
 });
 renderAll();
+updateSyncUI();
+$("#driveConnectBtn")?.addEventListener("click",()=>connectDrive());
+$("#driveDisconnectBtn")?.addEventListener("click",disconnectDrive);
+$("#driveSyncBtn")?.addEventListener("click",()=>uploadOrSyncDrive(true));
+$("#driveRestoreBtn")?.addEventListener("click",()=>restoreFromDrive(true));
+$("#driveAutoSync")?.addEventListener("change",e=>{syncMeta.autoSync=e.target.checked;saveSyncMeta();updateSyncUI(e.target.checked?"自动同步已开启。数据修改后约 1.2 秒上传。":"自动同步已关闭。需要时可手动上传/同步。");if(e.target.checked)scheduleDriveAutoSync()});
+window.addEventListener("gisloaded",()=>{gisInit();updateSyncUI()});
+if(window.google?.accounts?.oauth2)gisInit();
 })();
 </script>
 
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=29").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=30").catch(() => {});
   });
 }
 </script>
