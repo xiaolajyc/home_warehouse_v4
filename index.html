@@ -192,6 +192,21 @@ th{font-size:12px;color:var(--muted)}
   .history-field{gap:8px}
   .history-field>span{flex-basis:52px;width:52px}
 }
+
+.check-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+.check-kpi{padding:14px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.check-kpi .num{font-size:26px;font-weight:800;line-height:1.1}
+.check-card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fff;margin-top:10px}
+.check-card.overdue{border-color:#e5b7b7}
+.check-card.today{border-color:#e6c27a}
+.check-card .check-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.check-issues{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.check-issue{display:inline-block;padding:4px 8px;border-radius:999px;background:#fff0f0;color:#a22;font-size:12px}
+.check-normal{color:#19724b}
+.check-abnormal{color:#b42318}
+.check-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin-top:10px}
+.check-field{min-width:0}.check-field .label{font-size:11px;color:var(--muted)}.check-field .value{margin-top:2px;word-break:keep-all;overflow-wrap:break-word}
+@media(max-width:700px){.check-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.check-fields{grid-template-columns:1fr}}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -221,6 +236,7 @@ th{font-size:12px;color:var(--muted)}
     <button class="nav" data-view="items">🏷️ 物品</button>
     <button class="nav" data-view="locations">📍 位置</button>
     <button class="nav" data-view="history">🧾 操作流水</button>
+    <button class="nav" data-view="checks">🔍 周期检查</button>
     <button class="nav" data-view="settings">⚙️ 设置</button>
   </aside>
 
@@ -256,6 +272,17 @@ th{font-size:12px;color:var(--muted)}
         <h3 style="margin-top:0">⭐ 正在使用 / 优先使用</h3>
         <div class="muted">标记为“正在使用 / 已开封”的物品会优先显示。</div>
         <div id="priorityItems" class="list" style="margin-top:10px"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="row spread">
+          <div>
+            <h3 style="margin:0">🔍 周期检查</h3>
+            <div class="muted">主要确认长期存放物品是否变质、受潮、虫害等；不改变库存推荐逻辑。</div>
+          </div>
+          <button type="button" class="secondary" data-action="openChecks">查看全部</button>
+        </div>
+        <div id="dashboardChecks" class="list" style="margin-top:10px"></div>
       </div>
 
       <div class="card" style="margin-top:14px">
@@ -320,12 +347,35 @@ th{font-size:12px;color:var(--muted)}
       </div>
     </section>
 
+    <section id="checks" class="view">
+      <div class="card">
+        <div class="row spread">
+          <div>
+            <h2 class="section-title">周期检查</h2>
+            <div class="muted">箱子检查关注整箱内容；物品检查关注变质、虫害、受潮、包装等状态。异常只做标记，不影响取用推荐。</div>
+          </div>
+        </div>
+        <div id="checkSummary" class="check-summary"></div>
+        <div class="toolbar" style="margin-top:14px">
+          <select id="checkFilter">
+            <option value="all">全部需要关注</option>
+            <option value="overdue">已逾期</option>
+            <option value="today">今天到期</option>
+            <option value="soon">30天内</option>
+            <option value="abnormal">状态异常</option>
+            <option value="allScheduled">所有已设置周期</option>
+          </select>
+        </div>
+        <div id="checkList" class="list"></div>
+      </div>
+    </section>
+
     <section id="settings" class="view">
       <div class="card" style="margin-bottom:14px">
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V29</strong>
+          <strong>V31</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -451,6 +501,8 @@ function seed(){
     transactions:[
       {id:uid("tx"),time:iso(),type:"INIT",label:"创建示例数据",quantity:null,unit:null,containerId:null,itemId:null,sourceLocationId:null,targetLocationId:null,notes:"V1 示例"}
     ],
+    checkSchedules:[],
+    checkRecords:[],
     settings:{}
   };
 }
@@ -468,6 +520,9 @@ function load(){
       ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));
       if(!ci.updatedAt)ci.updatedAt=iso();
     });
+    if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];
+    if(!Array.isArray(x.checkRecords))x.checkRecords=[];
+    x.checkSchedules=x.checkSchedules.filter(s=>s&&s.targetType&&s.targetId);
     return x;
   }catch(e){ return seed(); }
 }
@@ -687,11 +742,12 @@ function renderCurrent(){
   if($("#items").classList.contains("active"))renderItems();
   if($("#locations").classList.contains("active"))renderLocations();
   if($("#history").classList.contains("active"))renderHistory();
+  if($("#checks").classList.contains("active"))renderChecks();
 }
 
 function renderAll(){
   save();
-  renderDashboard();renderContainers();renderItems();renderLocations();renderHistory();
+  renderDashboard();renderContainers();renderItems();renderLocations();renderHistory();renderChecks();
 }
 
 function renderDashboard(){
@@ -718,6 +774,7 @@ function renderDashboard(){
   }).join(""):"<div class='empty'>暂无操作</div>";
 
   renderDashboardPriority();
+  renderDashboardChecks();
   const q=$("#dashSearch")?.value.trim()||"";
   if(q)renderSearchResults(q,"#dashSearchResults");
   else if($("#dashSearchResults"))$("#dashSearchResults").innerHTML='<div class="empty">输入关键词即可搜索</div>';
@@ -843,6 +900,7 @@ function renderContainers(){
           <button type="button" class="secondary" data-action="viewContainer" data-id="${c.id}">详情</button>
           <button type="button" class="secondary" data-action="batchAddToContainer" data-id="${c.id}">批量新增物品</button>
           <button type="button" class="secondary" data-action="editContainer" data-id="${c.id}">编辑</button>
+          <button type="button" class="secondary" data-action="containerCheck" data-id="${c.id}">周期检查</button>
           <button type="button" class="secondary" data-action="moveContainer" data-id="${c.id}">移动箱子</button>
           <button type="button" class="danger" data-action="deleteContainer" data-id="${c.id}">删除</button>
         </div>
@@ -886,6 +944,7 @@ function renderItems(){
         <button type="button" class="secondary" data-action="viewItem" data-id="${i.id}">详情</button>
         <button type="button" class="secondary" data-action="editItem" data-id="${i.id}">编辑</button>
         <button type="button" class="secondary" data-action="itemOperation" data-id="${i.id}">库存操作</button>
+        <button type="button" class="secondary" data-action="itemCheck" data-id="${i.id}">周期检查</button>
         <button type="button" class="danger" data-action="deleteItem" data-id="${i.id}">删除</button>
       </div></td></tr>`
   }).join("")}</tbody></table></div>`:'<div class="empty">还没有物品</div>';
@@ -900,6 +959,132 @@ function renderLocations(){
   $("#locationTree").innerHTML=roots.length?`<ul class="tree">${roots.map(r=>renderNode(r.id)).join("")}</ul>`:'<div class="empty">还没有位置</div>';
 }
 
+
+function checkSchedule(targetType,targetId){
+  return db.checkSchedules.find(x=>x.targetType===targetType&&x.targetId===targetId);
+}
+function checkTargetName(s){
+  const target=s.targetType==="container"?container(s.targetId):item(s.targetId);
+  return target?.name||"未知对象";
+}
+function intervalLabel(s){
+  if(!s)return "不检查";
+  if(s.intervalUnit==="days")return `${s.intervalValue}天`;
+  return `${s.intervalValue}个月`;
+}
+function addInterval(date,unit,value){
+  const d=new Date(date);if(unit==="days")d.setDate(d.getDate()+Number(value||0));else d.setMonth(d.getMonth()+Number(value||0));return d.toISOString();
+}
+function checkStatus(s){
+  if(!s)return "none";
+  if(s.abnormal===true)return "abnormal";
+  if(!s.nextCheckAt)return "none";
+  const now=Date.now(),next=new Date(s.nextCheckAt).getTime(),day=86400000;
+  if(next<now)return "overdue";
+  if(next-now<=day)return "today";
+  if(next-now<=30*day)return "soon";
+  return "normal";
+}
+function checkStatusLabel(s){
+  const st=checkStatus(s);
+  if(st==="abnormal")return "🔴 状态异常";
+  if(st==="overdue")return `🔴 已逾期 ${Math.max(1,Math.ceil((Date.now()-new Date(s.nextCheckAt).getTime())/86400000))} 天`;
+  if(st==="today")return "🟠 今天到期";
+  if(st==="soon")return "🟡 30天内到期";
+  return "🟢 正常";
+}
+function checkIssuesHtml(s){return s?.issues?.length?`<div class="check-issues">${s.issues.map(x=>`<span class="check-issue">${esc(x)}</span>`).join("")}</div>`:""}
+function scheduledRows(){
+  return db.checkSchedules.filter(s=>{
+    const target=s.targetType==="container"?container(s.targetId):item(s.targetId);return !!target;
+  });
+}
+function renderDashboardChecks(){
+  const box=$("#dashboardChecks");if(!box)return;
+  const rows=scheduledRows().filter(s=>["abnormal","overdue","today","soon"].includes(checkStatus(s)))
+    .sort((a,b)=>{const rank={abnormal:0,overdue:1,today:2,soon:3,normal:4};return rank[checkStatus(a)]-rank[checkStatus(b)]||new Date(a.nextCheckAt)-new Date(b.nextCheckAt)})
+    .slice(0,4);
+  box.innerHTML=rows.length?rows.map(s=>checkCardHtml(s,true)).join(""):"<div class='empty'>暂无需要关注的周期检查</div>";
+}
+function checkCardHtml(s,compact=false){
+  const isC=s.targetType==="container",target=isC?container(s.targetId):item(s.targetId),st=checkStatus(s);
+  const loc=isC?locationPath(target?.locationId):itemContainers(s.targetId).filter(x=>Number(x.quantity)>0).map(x=>{const c=container(x.containerId);return c?`${c.name} · ${locationPath(c.locationId)}`:""}).filter(Boolean).join("；");
+  const qty=!isC?`${itemTotal(s.targetId)} ${target?.unit||""}`:"";
+  return `<div class="check-card ${st==='overdue'?'overdue':st==='today'?'today':''}">
+    <div class="check-title"><div><b>${isC?'📦':'🏷️'} ${esc(target?.name||'未知对象')}</b><div class="muted">${isC?'整箱内容检查':'物品状态检查'}${loc?` · ${esc(loc)}`:""}</div></div><span class="badge ${st==='abnormal'||st==='overdue'?'danger':st==='today'?'warn':''}">${checkStatusLabel(s)}</span></div>
+    ${!compact&&qty?`<div class="check-fields"><div class="check-field"><div class="label">当前库存</div><div class="value">${esc(qty)}</div></div><div class="check-field"><div class="label">检查周期</div><div class="value">${esc(intervalLabel(s))}</div></div></div>`:""}
+    ${checkIssuesHtml(s)}
+    <div class="muted" style="margin-top:8px">上次检查：${esc(fmtTime(s.lastCheckedAt))} · 下次检查：${esc(fmtTime(s.nextCheckAt))}</div>
+    <div class="actions" style="margin-top:10px;justify-content:flex-start"><button type="button" data-action="completeCheck" data-id="${s.id}">检查</button><button type="button" class="secondary" data-action="snoozeCheck" data-id="${s.id}">延期</button><button type="button" class="ghost" data-action="editCheckSchedule" data-id="${s.id}">设置</button></div>
+  </div>`;
+}
+function renderChecks(){
+  const summary=$("#checkSummary"),list=$("#checkList");if(!summary||!list)return;
+  const rows=scheduledRows();
+  const counts={abnormal:0,overdue:0,today:0,soon:0};rows.forEach(s=>{const st=checkStatus(s);if(counts[st]!=null)counts[st]++});
+  summary.innerHTML=[["🔴",counts.abnormal,"状态异常"],["🔴",counts.overdue,"已逾期"],["🟠",counts.today,"今天"],["🟡",counts.soon,"30天内"]].map(x=>`<div class="check-kpi"><div class="num">${x[0]} ${x[1]}</div><div class="muted">${x[2]}</div></div>`).join("");
+  const filter=$("#checkFilter")?.value||"all";
+  const filtered=rows.filter(s=>{
+    const st=checkStatus(s);if(filter==="all")return ["abnormal","overdue","today","soon"].includes(st);if(filter==="allScheduled")return true;if(filter==="abnormal")return st==="abnormal";if(filter==="overdue")return st==="overdue";if(filter==="today")return st==="today";if(filter==="soon")return ["today","soon"].includes(st);return false;
+  }).sort((a,b)=>{const rank={abnormal:0,overdue:1,today:2,soon:3,normal:4};return rank[checkStatus(a)]-rank[checkStatus(b)]||new Date(a.nextCheckAt)-new Date(b.nextCheckAt)});
+  list.innerHTML=filtered.length?filtered.map(s=>checkCardHtml(s,false)).join(""):"<div class='empty'>没有符合条件的周期检查</div>";
+}
+function scheduleFromForm(targetType,targetId){
+  const current=checkSchedule(targetType,targetId);const mode=$("#checkIntervalMode").value;
+  if(mode==="none")return null;
+  const unit=mode==="custom"?$("#checkCustomUnit").value:"months";
+  const value=mode==="custom"?Math.max(1,Math.round(Number($("#checkCustomValue").value)||0)):Number(mode);
+  if(!value)throw Error("请填写有效检查周期");
+  return {unit,value,current};
+}
+function openCheckScheduleEditor(targetType,targetId){
+  const target=targetType==="container"?container(targetId):item(targetId);if(!target)return;
+  const current=checkSchedule(targetType,targetId);
+  const mode=current?(current.intervalUnit==="days"?"custom":String(current.intervalValue)):"none";
+  openModal(`${targetType==="container"?'收纳箱':'物品'}检查周期 · ${target.name}`,`
+    <div class="notice">${targetType==="container"?'这里检查的是整箱物品的总体状态，不是箱子材质本身。':'这里主要确认物品是否变质、发霉、虫害、受潮、包装破损、漏液或出现异常气味。'}<br>异常只显示标记，不影响库存取用推荐。</div>
+    <label>检查周期<select id="checkIntervalMode"><option value="none" ${!current?'selected':''}>不检查</option><option value="1" ${mode==='1'?'selected':''}>每1个月</option><option value="3" ${mode==='3'?'selected':''}>每3个月</option><option value="6" ${mode==='6'?'selected':''}>每6个月</option><option value="12" ${mode==='12'?'selected':''}>每12个月</option><option value="24" ${mode==='24'?'selected':''}>每24个月</option><option value="custom" ${mode==='custom'?'selected':''}>自定义</option></select></label>
+    <div id="checkCustomWrap" class="${mode==='custom'?'':'hidden'}"><label>自定义间隔<input id="checkCustomValue" type="number" min="1" step="1" value="${current?.intervalValue||30}"></label><label>单位<select id="checkCustomUnit"><option value="days" ${current?.intervalUnit==='days'?'selected':''}>天</option><option value="months" ${current?.intervalUnit!=='days'?'selected':''}>个月</option></select></label></div>
+    ${current?`<div class="muted">上次检查：${esc(fmtTime(current.lastCheckedAt))} · 下次检查：${esc(fmtTime(current.nextCheckAt))}</div>`:`<div class="muted">首次设置周期时，默认视为今天已经完成首次检查，从今天开始计算下一次检查日期。</div>`}
+    ${modalFormButtons("保存检查设置")}
+  `,()=>{
+    const mode2=$("#checkIntervalMode").value;
+    if(mode2==="none"){
+      db.checkSchedules=db.checkSchedules.filter(x=>!(x.targetType===targetType&&x.targetId===targetId));
+      log("CHECK_SETTING","关闭周期检查",{containerId:targetType==='container'?targetId:null,itemId:targetType==='item'?targetId:null});closeModal();renderAll();toast("已关闭周期检查");return;
+    }
+    const unit=mode2==="custom"?$("#checkCustomUnit").value:"months";const value=mode2==="custom"?Math.max(1,Math.round(Number($("#checkCustomValue").value)||0)):Number(mode2);if(!value)throw Error("请填写有效检查周期");
+    const now=iso();let sch=current;
+    if(!sch){sch={id:uid("chk"),targetType,targetId,intervalUnit:unit,intervalValue:value,lastCheckedAt:now,nextCheckAt:addInterval(now,unit,value),abnormal:false,issues:[],notes:""};db.checkSchedules.push(sch);log("CHECK_SETTING","设置周期检查",{containerId:targetType==='container'?targetId:null,itemId:targetType==='item'?targetId:null,notes:`${intervalLabel(sch)}；默认视为首次检查已完成`})}
+    else {sch.intervalUnit=unit;sch.intervalValue=value;sch.nextCheckAt=addInterval(sch.lastCheckedAt||now,unit,value);}
+    closeModal();renderAll();toast("周期检查设置已保存");
+  });
+  $("#checkIntervalMode").onchange=()=>$("#checkCustomWrap").classList.toggle("hidden",$("#checkIntervalMode").value!=="custom");
+}
+function completeCheck(scheduleId){
+  const s=db.checkSchedules.find(x=>x.id===scheduleId);if(!s)return;const target=s.targetType==='container'?container(s.targetId):item(s.targetId);if(!target)return;
+  const isC=s.targetType==='container';
+  openModal(`${isC?'整箱内容':'物品状态'}检查 · ${target.name}`,`
+    <div class="notice">${isC?'快速确认整箱物品总体是否正常。':'重点检查变质、发霉、虫害、受潮、包装破损、漏液、异常气味等。'}</div>
+    ${isC?`<h3>箱内物品</h3><div class="muted">${containerItems(target.id).filter(x=>Number(x.quantity)>0).map(x=>{const i=item(x.itemId);return `${esc(i?.name||'未知')} × ${esc(x.quantity)} ${esc(x.unit||i?.unit||'')}`}).join('；')||'暂无库存'}</div>`:`<div class="check-fields"><div class="check-field"><div class="label">当前库存</div><div class="value">${esc(itemTotal(target.id))} ${esc(target.unit||'')}</div></div><div class="check-field"><div class="label">存放位置</div><div class="value">${esc(itemContainers(target.id).filter(x=>Number(x.quantity)>0).map(x=>{const c=container(x.containerId);return c?locationPath(c.locationId):''}).filter(Boolean).join('；')||'暂无库存')}</div></div></div>`}
+    <label style="margin-top:12px">检查结果<select id="checkResult"><option value="normal">🟢 正常</option><option value="abnormal">🔴 发现异常</option></select></label>
+    <div id="checkIssueWrap" class="hidden"><label>异常类型（可多选）</label><div class="check-issues">${['受潮','虫害','发霉 / 变质','包装破损','漏液','异常气味','其他'].map((x,n)=>`<label class="badge"><input type="checkbox" class="checkIssue" value="${esc(x)}" style="width:auto"> ${esc(x)}</label>`).join('')}</div></div>
+    <label>备注<textarea id="checkNote" rows="3" placeholder="例如：发现轻微受潮；暂时继续保留"></textarea></label>
+    ${modalFormButtons("完成检查")}
+  `,()=>{
+    const abnormal=$("#checkResult").value==='abnormal';const issues=$$('.checkIssue:checked').map(x=>x.value);const now=iso();
+    s.abnormal=abnormal;s.issues=issues;s.notes=$("#checkNote").value.trim();s.lastCheckedAt=now;s.nextCheckAt=addInterval(now,s.intervalUnit,s.intervalValue);
+    db.checkRecords.unshift({id:uid('cr'),scheduleId:s.id,checkedAt:now,result:abnormal?'abnormal':'normal',issues,notes:s.notes});if(db.checkRecords.length>500)db.checkRecords.length=500;
+    log('CHECK','完成周期检查',{containerId:isC?target.id:null,itemId:isC?null:target.id,notes:abnormal?`发现异常：${issues.join('、')||'未填写具体类型'}`:'检查正常'});
+    closeModal();renderAll();toast(abnormal?'已记录异常标记':'检查完成，状态正常');
+  });
+  $("#checkResult").onchange=()=>$("#checkIssueWrap").classList.toggle('hidden',$("#checkResult").value!=='abnormal');
+}
+function snoozeCheck(scheduleId){
+  const s=db.checkSchedules.find(x=>x.id===scheduleId);if(!s)return;
+  openModal('延期周期检查',`<div class="notice">延期不会改变“上次检查”日期，也不会清除异常标记。</div><label>延期<select id="snoozeValue"><option value="1">1天</option><option value="7">7天</option><option value="30">30天</option></select></label>${modalFormButtons('确认延期')}`,()=>{const days=Number($("#snoozeValue").value);s.nextCheckAt=addInterval(new Date().toISOString(),'days',days);log('CHECK','延期周期检查',{containerId:s.targetType==='container'?s.targetId:null,itemId:s.targetType==='item'?s.targetId:null,notes:`延期 ${days} 天`});closeModal();renderAll();toast(`已延期 ${days} 天`)})
+}
+function editCheckSchedule(scheduleId){const s=db.checkSchedules.find(x=>x.id===scheduleId);if(s)openCheckScheduleEditor(s.targetType,s.targetId)}
 function renderHistory(){
   const rows=db.transactions.slice(0,300);
   $("#historyList").innerHTML=rows.length?rows.map(t=>{
@@ -940,6 +1125,21 @@ function optionsItems(selected=""){
   return db.items.map(i=>`<option value="${i.id}" ${i.id===selected?"selected":""}>${esc(i.name)}${i.variant?" · "+esc(i.variant):""}</option>`).join("")
 }
 
+
+function ensureCheckSchedule(targetType,targetId,intervalMode){
+  if(intervalMode==='none')return;
+  const unit='months',value=Number(intervalMode);const now=iso();
+  const sch={id:uid('chk'),targetType,targetId,intervalUnit:unit,intervalValue:value,lastCheckedAt:now,nextCheckAt:addInterval(now,unit,value),abnormal:false,issues:[],notes:''};
+  db.checkSchedules.push(sch);
+}
+function updateCheckScheduleSimple(targetType,targetId,intervalMode){
+  const current=checkSchedule(targetType,targetId);
+  if(intervalMode==='none'){if(current)db.checkSchedules=db.checkSchedules.filter(x=>x!==current);return;}
+  const value=Number(intervalMode);if(!value)return;
+  if(!current){ensureCheckSchedule(targetType,targetId,intervalMode);return;}
+  current.intervalUnit='months';current.intervalValue=value;current.nextCheckAt=addInterval(current.lastCheckedAt||iso(),'months',value);
+}
+
 function openContainer(id=null){
   const c=id?container(id):null;
   openModal(c?"编辑收纳箱":"新增收纳箱",`
@@ -949,6 +1149,8 @@ function openContainer(id=null){
     <label>当前位置<select id="f_location">${optionsLocations(c?.locationId||db.locations[0]?.id||"")}</select></label>
     <label>标签（逗号分隔）<input id="f_tags" value="${esc(tagsOf(c?.tags).join(","))}" placeholder="工具, 常用"></label>
     <label>备注<textarea id="f_notes" rows="3">${esc(c?.notes||"")}</textarea></label>
+    <label>整箱内容检查周期<select id="f_checkInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
+    <div class="muted">默认不检查。设置周期后，保存当天视为首次检查已完成。</div>
     <label>状态<select id="f_status"><option value="ACTIVE" ${c?.status!=="ARCHIVED"?"selected":""}>使用中</option><option value="EMPTY" ${c?.status==="EMPTY"?"selected":""}>空箱</option><option value="ARCHIVED" ${c?.status==="ARCHIVED"?"selected":""}>归档</option></select></label>
     ${modalFormButtons(c?"保存修改":"创建收纳箱")}
   `,()=>{
@@ -956,10 +1158,14 @@ function openContainer(id=null){
     const data={name,code:c?.code||uid("BOX"),type:$("#f_type").value.trim()||"收纳箱",
       locationId:$("#f_location").value,tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),
       notes:$("#f_notes").value.trim(),status:$("#f_status").value};
+    const intervalMode=$("#f_checkInterval").value;
     if(c)Object.assign(c,data),log("MASTER","修改收纳箱",{containerId:c.id,notes:c.name});
-    else{const x={id:uid("ct"),...data,photos:[]};db.containers.push(x);log("MASTER","新增收纳箱",{containerId:x.id,notes:x.name})}
+    else{const x={id:uid("ct"),...data,photos:[]};db.containers.push(x);log("MASTER","新增收纳箱",{containerId:x.id,notes:x.name});if(intervalMode!=="none")ensureCheckSchedule("container",x.id,intervalMode)}
+    if(c)updateCheckScheduleSimple("container",c.id,intervalMode);
     closeModal();renderAll();toast(c?"收纳箱已修改":"收纳箱已创建");
   });
+  const currentCheck=checkSchedule("container",id);
+  if(currentCheck&&$("#f_checkInterval"))$("#f_checkInterval").value=currentCheck.intervalUnit==="months"?String(currentCheck.intervalValue):"none";
 }
 
 function openItem(id=null){
@@ -974,6 +1180,8 @@ function openItem(id=null){
     <label>最低库存（可选）<input id="f_min" type="number" min="0" step="1" value="${Number(i?.minStock)||0}"></label>
     <label style="display:flex;align-items:center;gap:8px"><input id="f_zeroAlert" type="checkbox" ${i?.zeroStockAlert===true?"checked":""} style="width:auto"> 库存为0时提醒</label>
     <div class="muted">开启后，即使库存降到 0 也会保留物品并提醒补货；关闭且最低库存为 0 时，库存用完后自动移除物品。默认关闭。</div>
+    <label>物品状态检查周期<select id="f_checkInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
+    <div class="muted">主要检查变质、虫害、受潮、包装破损、漏液和异常气味。设置周期后，保存当天视为首次检查已完成。</div>
     ${i?"":
       `<label>直接放入收纳箱<select id="f_container"><option value="">暂不入箱</option>${optionsContainers(defaultContainer)}</select></label>
        <label>入箱数量<input id="f_initialQty" type="number" min="0" step="1" value="1" inputmode="numeric"></label>
@@ -988,15 +1196,18 @@ function openItem(id=null){
     const data={name,variant:$("#f_variant").value.trim(),unit:$("#f_unit").value.trim()||"件",minStock:Math.max(0,Math.round(Number($("#f_min").value)||0)),zeroStockAlert:$("#f_zeroAlert").checked,
       tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),notes:$("#f_notes").value.trim()};
 
+    const intervalMode=$("#f_checkInterval").value;
     if(i){
       Object.assign(i,data);
       log("MASTER","修改物品",{itemId:i.id,notes:i.name});
+      updateCheckScheduleSimple("item",i.id,intervalMode);
       closeModal();renderAll();toast("物品已修改");
       return;
     }
 
     const x={id:uid("it"),...data};
     db.items.push(x);
+    if(intervalMode!=="none")ensureCheckSchedule("item",x.id,intervalMode);
 
     const cid=$("#f_container").value;
     const qty=Math.max(0,Math.round(Number($("#f_initialQty").value)||0));
@@ -1017,6 +1228,8 @@ function openItem(id=null){
 
     closeModal();renderAll();toast(cid&&qty>0?"物品已创建并放入收纳箱":"物品已创建");
   });
+  const currentCheck=checkSchedule("item",id);
+  if(currentCheck&&$("#f_checkInterval"))$("#f_checkInterval").value=currentCheck.intervalUnit==="months"?String(currentCheck.intervalValue):"none";
 }
 function openLocation(id=null,parentPreset=null){
   const l=id?location(id):null;
@@ -1139,16 +1352,18 @@ function openItemDetail(id){
     <div><b>总数量：</b>${esc(itemTotal(id))} ${esc(i.unit||"")}</div>
     <div style="margin-top:8px">${tagsOf(i.tags).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}</div>
     ${i.notes?`<p class="muted">${esc(i.notes)}</p>`:""}
+    ${checkSchedule("item",id)?.abnormal?`<div class="check-issues"><span class="check-issue">🔴 物品状态异常</span>${checkIssuesHtml(checkSchedule("item",id))}</div>`:""}
     <h3>存放位置</h3>
     ${rows.length?rows.map(x=>{const c=container(x.containerId);return `<div class="item"><b>📦 ${esc(c?.name||"未知箱")}</b><div class="path">📍 ${esc(locationPath(c?.locationId)||"未知位置")} · ${esc(x.quantity)} ${esc(x.unit||i.unit||"")}</div></div>`}).join(""):'<div class="empty">当前没有库存位置</div>'}
-    <div class="actions"><button type="button" class="danger" id="itemDetailDelete">删除物品</button>${modalFormButtons("关闭")}</div>
+    <div class="actions"><button type="button" class="secondary" id="itemDetailCheck">周期检查设置</button><button type="button" class="danger" id="itemDetailDelete">删除物品</button>${modalFormButtons("关闭")}</div>
   `,()=>closeModal());
   $("#modalSubmit").textContent="关闭";
   $("#modalCancel").onclick=closeModal;
+  $("#itemDetailCheck").onclick=()=>{closeModal();openCheckScheduleEditor("item",id)};
   $("#itemDetailDelete").onclick=()=>{
     if(itemContainers(id).some(x=>Number(x.quantity)>0)){alert("该物品仍在收纳箱中，不能删除。请先把数量全部清零。");return}
     openConfirm("删除物品",`确定删除物品 <b>“${esc(i.name)}”</b> 吗？`,()=>{
-      db.items=db.items.filter(x=>x.id!==id);db.containerItems=db.containerItems.filter(x=>x.itemId!==id);
+      db.items=db.items.filter(x=>x.id!==id);db.containerItems=db.containerItems.filter(x=>x.itemId!==id);db.checkSchedules=db.checkSchedules.filter(x=>!(x.targetType==="item"&&x.targetId===id));db.checkRecords=db.checkRecords.filter(r=>{const s=db.checkSchedules.find(x=>x.id===r.scheduleId);return !!s});
       log("MASTER","删除物品",{itemId:id,notes:i.name});closeModal();renderAll();toast("物品已删除");
     });
   };
@@ -1164,6 +1379,8 @@ function deleteContainer(id){
   openConfirm("删除收纳箱",`确定删除收纳箱 <b>“${esc(c.name)}”</b> 吗？<br><br>该箱目前为空，删除后无法恢复。`,()=>{
     db.containers=db.containers.filter(x=>x.id!==id);
     db.containerItems=db.containerItems.filter(x=>x.containerId!==id);
+    db.checkSchedules=db.checkSchedules.filter(x=>!(x.targetType==="container"&&x.targetId===id));
+    db.checkRecords=db.checkRecords.filter(r=>{const s=db.checkSchedules.find(x=>x.id===r.scheduleId);return !!s});
     log("MASTER","删除收纳箱",{containerId:id,notes:c.name});
     renderAll();toast("收纳箱已删除");
   });
@@ -1187,6 +1404,8 @@ function deleteItem(id){
   openConfirm("删除物品",`确定删除物品 <b>“${esc(i.name)}”</b> 吗？<br><br>当前没有库存。`,()=>{
     db.items=db.items.filter(x=>x.id!==id);
     db.containerItems=db.containerItems.filter(x=>x.itemId!==id);
+    db.checkSchedules=db.checkSchedules.filter(x=>!(x.targetType==="item"&&x.targetId===id));
+    db.checkRecords=db.checkRecords.filter(r=>{const s=db.checkSchedules.find(x=>x.id===r.scheduleId);return !!s});
     log("MASTER","删除物品",{itemId:id,notes:i.name});
     renderAll();toast("物品已删除");
   });
@@ -1454,16 +1673,22 @@ document.addEventListener("click",e=>{
   if(a==="viewContainer")return openContainerDetail(id);
   if(a==="batchAddToContainer")return openBatchAddToContainer(id);
   if(a==="editContainer")return openContainer(id);
+  if(a==="containerCheck")return openCheckScheduleEditor("container",id);
   if(a==="moveContainer")return openMoveContainer(id);
   if(a==="deleteContainer")return deleteContainer(id);
   if(a==="viewItem")return openItemDetail(id);
   if(a==="editItem")return openItem(id);
+  if(a==="itemCheck")return openCheckScheduleEditor("item",id);
   if(a==="itemOperation")return openItemOperation(id);
   if(a==="deleteItem")return deleteItem(id);
   if(a==="viewLocation")return viewLocation(id);
   if(a==="editUsageQty")return editUsageQty(id);
   if(a==="toggleUsage")return toggleUsage(id);
   if(a==="deleteLocation")return deleteLocation(id);
+  if(a==="completeCheck")return completeCheck(id);
+  if(a==="snoozeCheck")return snoozeCheck(id);
+  if(a==="editCheckSchedule")return editCheckSchedule(id);
+  if(a==="openChecks"){showView("checks");return;}
 
   const ra=b.dataset.resultAction,rid=b.dataset.id;
   if(ra==="item"){showView("items");$("#itemFilter").value=item(rid)?.name||"";return}
@@ -1482,6 +1707,7 @@ $("#modalBody").addEventListener("click",e=>{
 $("#dashSearch")?.addEventListener("input",()=>renderDashboard());
 $("#containerFilter")?.addEventListener("input",renderContainers);
 $("#itemFilter")?.addEventListener("input",renderItems);
+$("#checkFilter")?.addEventListener("change",renderChecks);
 
 function exportJson(){
   const blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"});
@@ -1498,7 +1724,7 @@ $("#restoreInput").addEventListener("change",e=>{
       const x=JSON.parse(r.result);
       if(x.version!==1||!Array.isArray(x.locations)||!Array.isArray(x.containers)||!Array.isArray(x.items)||!Array.isArray(x.containerItems))throw Error();
       if(!confirm("恢复备份会覆盖当前浏览器数据，确定继续吗？"))return;
-      x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));});db=x;save();renderAll();toast("备份已恢复");
+      x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));});if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];db=x;save();renderAll();toast("备份已恢复");
     }catch(err){alert("无效的 V1 JSON 备份")}
   };
   r.readAsText(file);e.target.value="";
@@ -1533,7 +1759,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=30").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=31").catch(() => {});
   });
 }
 </script>
