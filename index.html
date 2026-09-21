@@ -222,13 +222,19 @@ th{font-size:12px;color:var(--muted)}
 .photo-preview img{width:90px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 .photo-note{font-size:12px;color:var(--muted)}
 
+.box-photo-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.box-photo-preview{display:flex;align-items:center;gap:8px;margin-top:8px}
+.box-photo-preview img{width:88px;height:88px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
+.box-thumb{width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:0 0 auto}
+.box-name-with-photo{display:flex;align-items:center;gap:8px;min-width:0}
+.box-name-with-photo .box-name-text{min-width:0}
 
-.container-photo-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.container-photo-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .container-photo-preview{display:flex;align-items:center;gap:8px;margin-top:8px}
 .container-photo-preview img{width:88px;height:88px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
 .container-thumb{width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:0 0 auto}
 .container-name-with-photo{display:flex;align-items:center;gap:8px;min-width:0}
-.container-name-with-photo .container-name-text{min-width:0}
+.container-name-text{min-width:0}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -807,13 +813,8 @@ function showView(id){
   renderCurrent();
 }
 
-" alt=""><span class="box-name-text">${esc(box.name||"")}</span></span>`
-    : esc(box?.name||"");
-}
-
-
-let __pendingContainerPhoto="";
-function resizeContainerPhoto(file){
+let __pendingBoxPhoto="";
+function resizeBoxPhoto(file){
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
     reader.onerror=reject;
@@ -821,11 +822,13 @@ function resizeContainerPhoto(file){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const max=1200, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+        const max=1200;
+        const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
         const c=document.createElement("canvas");
         c.width=Math.max(1,Math.round(img.naturalWidth*scale));
         c.height=Math.max(1,Math.round(img.naturalHeight*scale));
-        c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+        const ctx=c.getContext("2d");
+        ctx.drawImage(img,0,0,c.width,c.height);
         resolve(c.toDataURL("image/jpeg",0.80));
       };
       img.src=reader.result;
@@ -833,9 +836,11 @@ function resizeContainerPhoto(file){
     reader.readAsDataURL(file);
   });
 }
-function containerPhotoMarkup(container){
-  const src=container?.photo||"";
-  return src?`<span class="container-name-with-photo"><img class="container-thumb" src="${src}" alt=""><span class="container-name-text">${esc(container.name||"")}</span></span>`:esc(container?.name||"");
+function boxPhotoMarkup(box){
+  const src=box?.photo||"";
+  return src
+    ? `<span class="box-name-with-photo"><img class="box-thumb" src="${src}" alt=""><span class="box-name-text">${esc(box.name||"")}</span></span>`
+    : esc(box?.name||"");
 }
 
 function renderCurrent(){
@@ -995,7 +1000,7 @@ function renderContainers(){
     const entries=containerItems(c.id).filter(x=>Number(x.quantity)>0);
     return `<div class="item">
       <div class="row spread">
-        <div><b>📦 ${esc(c.name)}</b> ${c.status==="ARCHIVED"?'<span class="badge">归档</span>':(containerItems(c.id).some(x=>Number(x.quantity)>0)?"":'<span class="badge warn">空箱</span>')}
+        <div><b class="container-name-with-photo">📦 ${c.photo?`<img class="container-thumb" src="${c.photo}" alt="">`:``}<span class="container-name-text">${esc(c.name)}</span></b> ${c.status==="ARCHIVED"?'<span class="badge">归档</span>':(containerItems(c.id).some(x=>Number(x.quantity)>0)?"":'<span class="badge warn">空箱</span>')}
           <div class="path">📍 ${esc(locationPath(c.locationId)||"未指定位置")}</div>
         </div>
         <div class="row">
@@ -1268,6 +1273,7 @@ function updateCheckScheduleSimple(targetType,targetId,intervalMode){
 
 function openContainer(id=null){
   const c=id?container(id):null;
+  window.__editingContainerPhoto=c?.photo||(Array.isArray(c?.photos)?c.photos[0]||"":"" )||"";
   openModal(c?"编辑收纳箱":"新增收纳箱",`
     <label>名称<input id="f_name" value="${esc(c?.name||"")}" placeholder="例如：工具收纳箱" required></label>
     
@@ -1275,6 +1281,17 @@ function openContainer(id=null){
     <label>当前位置<select id="f_location">${optionsLocations(c?.locationId||db.locations[0]?.id||"")}</select></label>
     <label>标签（逗号分隔）<input id="f_tags" value="${esc(tagsOf(c?.tags).join(","))}" placeholder="工具, 常用"></label>
     <label>备注<textarea id="f_notes" rows="3">${esc(c?.notes||"")}</textarea></label>
+
+    <label>收纳箱照片</label>
+    <div class="container-photo-actions">
+      <button type="button" class="secondary" id="takeContainerPhoto">📷 拍照</button>
+      <button type="button" class="secondary" id="chooseContainerPhoto">🖼️ 从图库选择</button>
+      <button type="button" class="ghost ${c?.photo?'':'hidden'}" id="removeContainerPhoto">删除照片</button>
+    </div>
+    <input id="containerPhotoCamera" type="file" accept="image/*" capture="environment" class="hidden">
+    <input id="containerPhotoGallery" type="file" accept="image/*" class="hidden">
+    <div id="containerPhotoPreview" class="container-photo-preview">${(c?.photo||(Array.isArray(c?.photos)?c.photos[0]||"":"" ))?`<img src="${c.photo||(Array.isArray(c?.photos)?c.photos[0]:"")}" alt="收纳箱照片">`:''}</div>
+
     <label>整箱内容检查周期<select id="f_checkInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
     <div class="muted">默认不检查。设置周期后，保存当天视为首次检查已完成。</div>
     <label>状态<select id="f_status"><option value="ACTIVE" ${c?.status!=="ARCHIVED"?"selected":""}>使用中</option><option value="EMPTY" ${c?.status==="EMPTY"?"selected":""}>空箱</option><option value="ARCHIVED" ${c?.status==="ARCHIVED"?"selected":""}>归档</option></select></label>
@@ -1283,10 +1300,11 @@ function openContainer(id=null){
     const name=$("#f_name").value.trim();if(!name)throw Error("请输入收纳箱名称");
     const data={name,code:c?.code||uid("BOX"),type:$("#f_type").value.trim()||"收纳箱",
       locationId:$("#f_location").value,tags:$("#f_tags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean),
-      notes:$("#f_notes").value.trim(),status:$("#f_status").value};
+      notes:$("#f_notes").value.trim(),status:$("#f_status").value,
+      photo:window.__editingContainerPhoto||c?.photo||""};
     const intervalMode=$("#f_checkInterval").value;
     if(c)Object.assign(c,data),log("MASTER","修改收纳箱",{containerId:c.id,notes:c.name});
-    else{const x={id:uid("ct"),...data,photos:[]};db.containers.push(x);log("MASTER","新增收纳箱",{containerId:x.id,notes:x.name});if(intervalMode!=="none")ensureCheckSchedule("container",x.id,intervalMode)}
+    else{const x={id:uid("ct"),...data};db.containers.push(x);log("MASTER","新增收纳箱",{containerId:x.id,notes:x.name});if(intervalMode!=="none")ensureCheckSchedule("container",x.id,intervalMode)}
     if(c)updateCheckScheduleSimple("container",c.id,intervalMode);
     closeModal();renderAll();toast(c?"收纳箱已修改":"收纳箱已创建");
   });
@@ -1307,16 +1325,6 @@ function openItem(id=null){
     <label>最低库存（可选）<input id="f_min" type="number" min="0" step="1" value="${Number(i?.minStock)||0}"></label>
     <label style="display:flex;align-items:center;gap:8px"><input id="f_zeroAlert" type="checkbox" ${i?.zeroStockAlert===true?"checked":""} style="width:auto"> 库存为0时提醒</label>
     <div class="muted">开启后，即使库存降到 0 也会保留物品并提醒补货；关闭且最低库存为 0 时，库存用完后自动移除物品。默认关闭。</div>
-<div class="field">
-  <label>收纳箱照片</label>
-  <div class="container-photo-row">
-    <input id="containerPhotoFile" type="file" accept="image/*" capture="environment">
-    <button type="button" class="secondary" id="containerPhotoGallery">从图库选择</button>
-  </div>
-  <div id="containerPhotoPreview" class="container-photo-preview"></div>
-  <button type="button" class="secondary hidden" id="containerPhotoRemove">删除照片</button>
-</div>
-
     <label>物品状态检查周期<select id="f_checkInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
     <div class="muted">主要检查变质、虫害、受潮、包装破损、漏液和异常气味。设置周期后，保存当天视为首次检查已完成。</div>
     ${i?"":
@@ -1944,29 +1952,86 @@ document.addEventListener('click',e=>{
   if(e.target?.id==='removeItemPhoto'){window.__editingItemPhoto='';const p=document.getElementById('itemPhotoPreview');if(p)p.innerHTML='<span class="photo-note">未添加照片</span>';e.target.classList.add('hidden');}
 });
 
-
 document.addEventListener("change", async e=>{
-  if(e.target && e.target.id==="containerPhotoFile"){
+  if(e.target && e.target.id==="boxPhotoFile"){
     const f=e.target.files?.[0]; if(!f)return;
     try{
-      __pendingContainerPhoto=await resizeContainerPhoto(f);
-      const p=document.getElementById("containerPhotoPreview");
-      if(p)p.innerHTML=`<img src="${__pendingContainerPhoto}" alt="收纳箱照片">`;
-      const r=document.getElementById("containerPhotoRemove");
+      __pendingBoxPhoto=await resizeBoxPhoto(f);
+      const p=document.getElementById("boxPhotoPreview");
+      if(p)p.innerHTML=`<img src="${__pendingBoxPhoto}" alt="箱子照片">`;
+      const r=document.getElementById("boxPhotoRemove");
       if(r)r.classList.remove("hidden");
-    }catch(err){ if(typeof toast==="function")toast("照片处理失败"); }
+    }catch(err){
+      if(typeof toast==="function")toast("照片处理失败");
+    }
   }
 });
 document.addEventListener("click",e=>{
-  if(e.target && e.target.id==="containerPhotoGallery"){
-    const f=document.getElementById("containerPhotoFile");
+  if(e.target && e.target.id==="boxPhotoGallery"){
+    const f=document.getElementById("boxPhotoFile");
     if(f){f.removeAttribute("capture");f.click();}
   }
-  if(e.target && e.target.id==="containerPhotoRemove"){
-    __pendingContainerPhoto="";
-    const p=document.getElementById("containerPhotoPreview"); if(p)p.innerHTML="";
+  if(e.target && e.target.id==="boxPhotoRemove"){
+    __pendingBoxPhoto="";
+    const p=document.getElementById("boxPhotoPreview"); if(p)p.innerHTML="";
     e.target.classList.add("hidden");
-    const f=document.getElementById("containerPhotoFile"); if(f)f.value="";
+    const f=document.getElementById("boxPhotoFile"); if(f)f.value="";
+  }
+});
+
+
+async function resizeContainerPhotoFile(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=reject;
+    reader.onload=()=>{
+      const img=new Image();
+      img.onerror=reject;
+      img.onload=()=>{
+        const max=1200;
+        const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+        const canvas=document.createElement("canvas");
+        canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));
+        canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
+        canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+        resolve(canvas.toDataURL("image/jpeg",0.80));
+      };
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+document.addEventListener("change",async e=>{
+  if(!e.target?.matches("#containerPhotoCamera,#containerPhotoGallery")) return;
+  const file=e.target.files?.[0];
+  if(!file)return;
+  try{
+    window.__editingContainerPhoto=await resizeContainerPhotoFile(file);
+    const preview=document.getElementById("containerPhotoPreview");
+    if(preview)preview.innerHTML=`<img src="${window.__editingContainerPhoto}" alt="收纳箱照片">`;
+    document.getElementById("removeContainerPhoto")?.classList.remove("hidden");
+  }catch(err){
+    if(typeof toast==="function")toast("照片处理失败");
+  }
+});
+
+document.addEventListener("click",e=>{
+  const t=e.target.closest?.("#takeContainerPhoto,#chooseContainerPhoto,#removeContainerPhoto");
+  if(!t)return;
+  if(t.id==="takeContainerPhoto"){
+    document.getElementById("containerPhotoCamera")?.click();
+  }else if(t.id==="chooseContainerPhoto"){
+    document.getElementById("containerPhotoGallery")?.click();
+  }else if(t.id==="removeContainerPhoto"){
+    window.__editingContainerPhoto="";
+    const p=document.getElementById("containerPhotoPreview");
+    if(p)p.innerHTML="";
+    t.classList.add("hidden");
+    const a=document.getElementById("containerPhotoCamera");
+    const b=document.getElementById("containerPhotoGallery");
+    if(a)a.value="";
+    if(b)b.value="";
   }
 });
 
