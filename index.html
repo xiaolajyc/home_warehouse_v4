@@ -422,7 +422,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V39</strong>
+          <strong>V37</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -850,114 +850,6 @@ function boxPhotoMarkup(box){
   return src
     ? `<span class="box-name-with-photo"><img class="box-thumb" src="${src}" alt=""><span class="box-name-text">${esc(box.name||"")}</span></span>`
     : esc(box?.name||"");
-}
-
-
-function transferContainerHasItem(c,itemId){
-  if(!c || !itemId) return false;
-  const items = Array.isArray(c.items) ? c.items :
-                Array.isArray(c.inventory) ? c.inventory :
-                Array.isArray(c.stock) ? c.stock : [];
-  return items.some(x=>{
-    if(typeof x==="string") return x===itemId;
-    if(!x) return false;
-    const id=x.itemId ?? x.productId ?? x.id;
-    const qty=Number(x.qty ?? x.quantity ?? x.count ?? x.amount ?? 1);
-    return id===itemId && qty>0;
-  });
-}
-function filterTransferSourceContainers(itemId){
-  if(!itemId)return;
-  const selects=[...document.querySelectorAll(
-    'select[data-role="transfer-source"],select[id*="transfer"][id*="source"],select[id*="source"][data-transfer],select[name*="sourceContainer"]'
-  )];
-  selects.forEach(sel=>{
-    const current=sel.value;
-    [...sel.options].forEach(o=>{
-      if(!o.dataset.containerId)return;
-      const c=typeof container==="function"?container(o.dataset.containerId):null;
-      o.hidden=!!c && !transferContainerHasItem(c,itemId);
-      o.disabled=o.hidden;
-    });
-    if(current && ![...sel.options].some(o=>o.value===current && !o.disabled)){
-      sel.value="";
-    }
-  });
-}
-
-
-function transferItemIdFromRecord(r){
-  return r?.itemId ?? r?.productId ?? r?.variantId ?? r?.skuId ?? r?.id;
-}
-function transferRecordContainerId(r){
-  return r?.containerId ?? r?.boxId ?? r?.locationId ?? r?.storageId ?? r?.zoneId;
-}
-function transferRecordQty(r){
-  const q=Number(r?.quantity ?? r?.qty ?? r?.count ?? r?.amount ?? r?.stock ?? 0);
-  return Number.isFinite(q)?q:0;
-}
-function transferSourceContainerIds(itemId){
-  const ids=new Set();
-  if(!itemId)return ids;
-
-  // Look through common global inventory collections.
-  const collections=[];
-  for(const k of ["db","state","appState","data"]){
-    const root=window[k];
-    if(root && typeof root==="object"){
-      for(const key of ["inventory","stocks","stock","records","items","batches","locations"]){
-        if(Array.isArray(root[key])) collections.push(root[key]);
-      }
-    }
-  }
-  if(window.db && Array.isArray(window.db.inventory)) collections.push(window.db.inventory);
-  if(window.db && Array.isArray(window.db.stock)) collections.push(window.db.stock);
-
-  for(const arr of collections){
-    for(const r of arr){
-      if(transferItemIdFromRecord(r)!==itemId)continue;
-      const cid=transferRecordContainerId(r);
-      if(cid && transferRecordQty(r)>0)ids.add(String(cid));
-    }
-  }
-
-  // Fallback: inspect containers' own item/inventory arrays.
-  const cs=(typeof db!=="undefined" && Array.isArray(db.containers))?db.containers:[];
-  for(const c of cs){
-    const arr=Array.isArray(c.items)?c.items:(Array.isArray(c.inventory)?c.inventory:(Array.isArray(c.stock)?c.stock:[]));
-    for(const r of arr){
-      const rid=typeof r==="string"?r:transferItemIdFromRecord(r);
-      const q=typeof r==="string"?1:transferRecordQty(r);
-      if(String(rid)===String(itemId)&&q>0)ids.add(String(c.id));
-    }
-  }
-  return ids;
-}
-function applyTransferSourceFilter(itemId){
-  const allowed=transferSourceContainerIds(itemId);
-  const selects=[...document.querySelectorAll("select")].filter(s=>{
-    const txt=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-    return /source|来源/.test(txt) && /container|box|storage|收纳箱|箱/.test(txt);
-  });
-  selects.forEach(sel=>{
-    const previous=sel.value;
-    [...sel.options].forEach(o=>{
-      if(!o.value)return;
-      // Only filter options that resolve to a known container.
-      const cid=String(o.dataset.containerId||o.value);
-      const c=typeof container==="function"?container(o.value):null;
-      const looksLikeContainer=!!c || allowed.has(cid);
-      if(looksLikeContainer){
-        o.hidden=!allowed.has(cid);
-        o.disabled=!allowed.has(cid);
-      }
-    });
-    if(previous && [...sel.options].some(o=>o.value===previous && !o.disabled)){
-      sel.value=previous;
-    }else if(previous){
-      sel.value="";
-    }
-  });
 }
 
 function renderCurrent(){
@@ -2048,7 +1940,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=39").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=37").catch(() => {});
   });
 }
 
@@ -2213,41 +2105,6 @@ document.addEventListener("click",e=>{
     }
   }catch(err){}
 });
-
-
-document.addEventListener("change",e=>{
-  const s=e.target;
-  if(!s)return;
-  if(s.matches('select[data-role="transfer-item"],select[id*="transfer"][id*="item"],select[name*="transferItem"]')){
-    filterTransferSourceContainers(s.value);
-  }
-});
-document.addEventListener("click",e=>{
-  const b=e.target.closest?.('[data-action="transfer"],[data-op="transfer"],button');
-  if(!b)return;
-  setTimeout(()=>{
-    const itemSel=document.querySelector('select[data-role="transfer-item"],select[id*="transfer"][id*="item"],select[name*="transferItem"]');
-    if(itemSel)filterTransferSourceContainers(itemSel.value);
-  },0);
-});
-
-
-document.addEventListener("change",e=>{
-  const s=e.target;
-  if(!s)return;
-  const meta=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-  if(/transfer|转移/.test(meta) && /item|物品/.test(meta)){
-    setTimeout(()=>applyTransferSourceFilter(s.value),0);
-  }
-});
-const _v39Observer=new MutationObserver(()=>{
-  const itemSel=[...document.querySelectorAll("select")].find(s=>{
-    const meta=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-    return /transfer|转移/.test(meta) && /item|物品/.test(meta);
-  });
-  if(itemSel && itemSel.value) applyTransferSourceFilter(itemSel.value);
-});
-_v39Observer.observe(document.body,{childList:true,subtree:true});
 
 </script>
 
