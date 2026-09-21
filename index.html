@@ -235,6 +235,15 @@ th{font-size:12px;color:var(--muted)}
 .container-thumb{width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:0 0 auto}
 .container-name-with-photo{display:flex;align-items:center;gap:8px;min-width:0}
 .container-name-text{min-width:0}
+
+.photo-lightbox{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;padding:18px}
+.photo-lightbox.show{display:flex}
+.photo-lightbox img{max-width:94vw;max-height:90vh;object-fit:contain;border-radius:12px}
+.photo-lightbox .photo-close{position:absolute;top:14px;right:14px;width:42px;height:42px;border:0;border-radius:50%;font-size:28px;line-height:42px;background:rgba(255,255,255,.9);color:#111}
+.photo-clickable{cursor:pointer}
+
+.search-result-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.search-result-actions button{font-size:12px;padding:5px 8px}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -413,7 +422,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V36</strong>
+          <strong>V37</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -1000,7 +1009,7 @@ function renderContainers(){
     const entries=containerItems(c.id).filter(x=>Number(x.quantity)>0);
     return `<div class="item">
       <div class="row spread">
-        <div><b class="container-name-with-photo">📦 ${c.photo?`<img class="container-thumb" src="${c.photo}" alt="">`:``}<span class="container-name-text">${esc(c.name)}</span></b> ${c.status==="ARCHIVED"?'<span class="badge">归档</span>':(containerItems(c.id).some(x=>Number(x.quantity)>0)?"":'<span class="badge warn">空箱</span>')}
+        <div><b class="container-name-with-photo">📦 ${c.photo?`<img class="container-thumb photo-clickable" src="${c.photo}" alt="">`:``}<span class="container-name-text">${esc(c.name)}</span></b> ${c.status==="ARCHIVED"?'<span class="badge">归档</span>':(containerItems(c.id).some(x=>Number(x.quantity)>0)?"":'<span class="badge warn">空箱</span>')}
           <div class="path">📍 ${esc(locationPath(c.locationId)||"未指定位置")}</div>
         </div>
         <div class="row">
@@ -1931,7 +1940,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=36").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=37").catch(() => {});
   });
 }
 
@@ -2035,6 +2044,73 @@ document.addEventListener("click",e=>{
   }
 });
 
+
+document.addEventListener("click",e=>{
+  const img=e.target.closest?.("img.photo-clickable");
+  if(img && img.src){
+    e.preventDefault();
+    e.stopPropagation();
+    const box=document.getElementById("photoLightbox");
+    const big=document.getElementById("photoLightboxImg");
+    if(box&&big){big.src=img.src;box.classList.add("show");box.setAttribute("aria-hidden","false");}
+    return;
+  }
+  if(e.target?.id==="photoLightboxClose" || e.target?.id==="photoLightbox"){
+    const box=document.getElementById("photoLightbox");
+    const big=document.getElementById("photoLightboxImg");
+    if(box){box.classList.remove("show");box.setAttribute("aria-hidden","true");}
+    if(big)big.src="";
+  }
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){
+    const box=document.getElementById("photoLightbox");
+    const big=document.getElementById("photoLightboxImg");
+    if(box){box.classList.remove("show");box.setAttribute("aria-hidden","true");}
+    if(big)big.src="";
+  }
+});
+
+
+function searchResultActions(itemId){
+  const i=typeof item==="function"?item(itemId):null;
+  if(!i)return "";
+  return `<div class="search-result-actions" data-search-item="${esc(itemId)}">
+    <button type="button" class="secondary" data-search-op="use">取用</button>
+    <button type="button" class="secondary" data-search-op="add">入库</button>
+    <button type="button" class="secondary" data-search-op="edit">编辑</button>
+  </div>`;
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest?.("[data-search-op]");
+  if(!b)return;
+  const wrap=b.closest("[data-search-item]");
+  const id=wrap?.getAttribute("data-search-item");
+  if(!id)return;
+  const op=b.getAttribute("data-search-op");
+  e.preventDefault();
+  e.stopPropagation();
+  try{
+    if(op==="edit"){
+      if(typeof openItem==="function") openItem(id);
+      else if(typeof editItem==="function") editItem(id);
+    }else if(op==="add"){
+      if(typeof openAddStock==="function") openAddStock(id);
+      else if(typeof addStock==="function") addStock(id);
+      else if(typeof openStockIn==="function") openStockIn(id);
+    }else if(op==="use"){
+      if(typeof openUseStock==="function") openUseStock(id);
+      else if(typeof useStock==="function") useStock(id);
+      else if(typeof openStockOut==="function") openStockOut(id);
+    }
+  }catch(err){}
+});
+
 </script>
+
+<div id="photoLightbox" class="photo-lightbox" aria-hidden="true">
+  <button type="button" class="photo-close" id="photoLightboxClose" aria-label="关闭">×</button>
+  <img id="photoLightboxImg" src="" alt="大图">
+</div>
 </body>
 </html>
