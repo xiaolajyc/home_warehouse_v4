@@ -422,7 +422,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V39</strong>
+          <strong>V40</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -853,112 +853,6 @@ function boxPhotoMarkup(box){
 }
 
 
-function transferContainerHasItem(c,itemId){
-  if(!c || !itemId) return false;
-  const items = Array.isArray(c.items) ? c.items :
-                Array.isArray(c.inventory) ? c.inventory :
-                Array.isArray(c.stock) ? c.stock : [];
-  return items.some(x=>{
-    if(typeof x==="string") return x===itemId;
-    if(!x) return false;
-    const id=x.itemId ?? x.productId ?? x.id;
-    const qty=Number(x.qty ?? x.quantity ?? x.count ?? x.amount ?? 1);
-    return id===itemId && qty>0;
-  });
-}
-function filterTransferSourceContainers(itemId){
-  if(!itemId)return;
-  const selects=[...document.querySelectorAll(
-    'select[data-role="transfer-source"],select[id*="transfer"][id*="source"],select[id*="source"][data-transfer],select[name*="sourceContainer"]'
-  )];
-  selects.forEach(sel=>{
-    const current=sel.value;
-    [...sel.options].forEach(o=>{
-      if(!o.dataset.containerId)return;
-      const c=typeof container==="function"?container(o.dataset.containerId):null;
-      o.hidden=!!c && !transferContainerHasItem(c,itemId);
-      o.disabled=o.hidden;
-    });
-    if(current && ![...sel.options].some(o=>o.value===current && !o.disabled)){
-      sel.value="";
-    }
-  });
-}
-
-
-function transferItemIdFromRecord(r){
-  return r?.itemId ?? r?.productId ?? r?.variantId ?? r?.skuId ?? r?.id;
-}
-function transferRecordContainerId(r){
-  return r?.containerId ?? r?.boxId ?? r?.locationId ?? r?.storageId ?? r?.zoneId;
-}
-function transferRecordQty(r){
-  const q=Number(r?.quantity ?? r?.qty ?? r?.count ?? r?.amount ?? r?.stock ?? 0);
-  return Number.isFinite(q)?q:0;
-}
-function transferSourceContainerIds(itemId){
-  const ids=new Set();
-  if(!itemId)return ids;
-
-  // Look through common global inventory collections.
-  const collections=[];
-  for(const k of ["db","state","appState","data"]){
-    const root=window[k];
-    if(root && typeof root==="object"){
-      for(const key of ["inventory","stocks","stock","records","items","batches","locations"]){
-        if(Array.isArray(root[key])) collections.push(root[key]);
-      }
-    }
-  }
-  if(window.db && Array.isArray(window.db.inventory)) collections.push(window.db.inventory);
-  if(window.db && Array.isArray(window.db.stock)) collections.push(window.db.stock);
-
-  for(const arr of collections){
-    for(const r of arr){
-      if(transferItemIdFromRecord(r)!==itemId)continue;
-      const cid=transferRecordContainerId(r);
-      if(cid && transferRecordQty(r)>0)ids.add(String(cid));
-    }
-  }
-
-  // Fallback: inspect containers' own item/inventory arrays.
-  const cs=(typeof db!=="undefined" && Array.isArray(db.containers))?db.containers:[];
-  for(const c of cs){
-    const arr=Array.isArray(c.items)?c.items:(Array.isArray(c.inventory)?c.inventory:(Array.isArray(c.stock)?c.stock:[]));
-    for(const r of arr){
-      const rid=typeof r==="string"?r:transferItemIdFromRecord(r);
-      const q=typeof r==="string"?1:transferRecordQty(r);
-      if(String(rid)===String(itemId)&&q>0)ids.add(String(c.id));
-    }
-  }
-  return ids;
-}
-function applyTransferSourceFilter(itemId){
-  const allowed=transferSourceContainerIds(itemId);
-  const selects=[...document.querySelectorAll("select")].filter(s=>{
-    const txt=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-    return /source|来源/.test(txt) && /container|box|storage|收纳箱|箱/.test(txt);
-  });
-  selects.forEach(sel=>{
-    const previous=sel.value;
-    [...sel.options].forEach(o=>{
-      if(!o.value)return;
-      // Only filter options that resolve to a known container.
-      const cid=String(o.dataset.containerId||o.value);
-      const c=typeof container==="function"?container(o.value):null;
-      const looksLikeContainer=!!c || allowed.has(cid);
-      if(looksLikeContainer){
-        o.hidden=!allowed.has(cid);
-        o.disabled=!allowed.has(cid);
-      }
-    });
-    if(previous && [...sel.options].some(o=>o.value===previous && !o.disabled)){
-      sel.value=previous;
-    }else if(previous){
-      sel.value="";
-    }
-  });
-}
 
 function renderCurrent(){
   if($("#dashboard").classList.contains("active"))renderDashboard();
@@ -1791,25 +1685,30 @@ function openMoveContainer(id){
 }
 
 function operationContainerOptions(itemId, selected=""){
-  const valid = new Set(
-    db.containerItems
-      .filter(x => x.itemId===itemId && Number(x.quantity)>0)
-      .map(x => x.containerId)
+  // 来源箱永远根据“这个物品的实际库存记录”计算，和当前操作模式无关。
+  // 这样从新增/取出/转移来回切换时不会互相污染。
+  const rows=db.containerItems.filter(x =>
+    x.itemId===itemId && Number(x.quantity)>0
   );
-  const boxes = db.containers.filter(c =>
-    c.status!=="ARCHIVED" && valid.has(c.id)
-  ).sort((a,b)=>{
-    const ar=db.containerItems.find(x=>x.containerId===a.id&&x.itemId===itemId);
-    const br=db.containerItems.find(x=>x.containerId===b.id&&x.itemId===itemId);
-    return Number(br?.inUseQty||0)-Number(ar?.inUseQty||0);
-  });
-  return boxes.length
-    ? boxes.map(c=>{
-        const row=db.containerItems.find(x=>x.containerId===c.id&&x.itemId===itemId);
-        return `<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.name)} · 库存 ${esc(row?.quantity||0)} ${esc(item(itemId)?.unit||"")}</option>`;
-      }).join("")
-    : '<option value="">没有库存可取用的收纳箱</option>';
+  const rowByContainer=new Map(rows.map(x=>[x.containerId,x]));
+
+  const boxes=db.containers
+    .filter(c=>c.status!=="ARCHIVED" && rowByContainer.has(c.id))
+    .sort((a,b)=>{
+      const ar=rowByContainer.get(a.id), br=rowByContainer.get(b.id);
+      const useDiff=Number(br?.inUseQty||0)-Number(ar?.inUseQty||0);
+      if(useDiff!==0)return useDiff; // 使用中的优先
+      return String(a.name||"").localeCompare(String(b.name||""));
+    });
+
+  if(!boxes.length)return '<option value="">没有该物品库存的收纳箱</option>';
+
+  return boxes.map(c=>{
+    const row=rowByContainer.get(c.id);
+    return `<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.name)} · 库存 ${esc(row.quantity)} ${esc(item(itemId)?.unit||"")}${Number(row.inUseQty||0)>0?` · 使用中 ${esc(row.inUseQty)}`:""}</option>`;
+  }).join("");
 }
+
 
 // 新增数量使用独立的收纳箱列表，不受取出数量的库存过滤影响。
 function addContainerOptions(selected=""){
@@ -1877,17 +1776,36 @@ function openItemOperation(id){
   });
   const sync=()=>{
     const op=$("#f_op").value;
-    $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
-    if($("#inUseWrap"))$("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
-    if(op==="remove"||op==="setUseQty"){
-      const selected=$("#f_container").value;
-      const preferred=operationContainerOptions(id,op==="remove"?"":selected);
-      $("#f_container").innerHTML=preferred;
-      if(!$("#f_container").value){
-        $("#f_container").innerHTML='<option value="">没有库存可取用的收纳箱</option>';
-      }
+    const source=$("#f_container");
+    const oldSource=source.value;
+
+    // 每次切换操作都重新生成来源箱列表：
+    // 新增 = 所有可用箱
+    // 取出 = 只有有库存的箱
+    // 转移 = 只有有库存的来源箱
+    // 设置使用中 = 只有有库存的箱
+    if(op==="add"){
+      source.innerHTML=addContainerOptions(oldSource);
+    }else{
+      source.innerHTML=operationContainerOptions(id,oldSource);
     }
-    $("#operationHelp").textContent=op==="add"?"新增数量：把物品放入指定收纳箱。":op==="remove"?"取出数量：从指定收纳箱扣减。":op==="transfer"?"箱间转移：把数量从一个箱子移动到另一个箱子。":op==="setUseQty"?"设置当前收纳箱中有多少数量正在使用 / 已开封。":"箱间操作";
+
+    $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
+    if(op==="transfer"){
+      const oldTarget=$("#f_to").value;
+      $("#f_to").innerHTML=optionsContainers(oldTarget);
+      if(oldTarget && [...$("#f_to").options].some(o=>o.value===oldTarget))
+        $("#f_to").value=oldTarget;
+    }
+
+    if($("#inUseWrap"))
+      $("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
+
+    $("#operationHelp").textContent=
+      op==="add"?"新增数量：把物品放入指定收纳箱。所有可用收纳箱都可以选择。":
+      op==="remove"?"取出数量：只从已有该物品库存的收纳箱取出，并优先显示正在使用的库存。":
+      op==="transfer"?"箱间转移：来源收纳箱只显示已有该物品库存的箱子；目标收纳箱独立选择，不受来源限制。":
+      op==="setUseQty"?"设置当前收纳箱中有多少数量正在使用 / 已开封。":"箱间操作";
   };
   $("#f_op").onchange=sync;sync();
 }
@@ -2048,7 +1966,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=39").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=40").catch(() => {});
   });
 }
 
@@ -2215,39 +2133,6 @@ document.addEventListener("click",e=>{
 });
 
 
-document.addEventListener("change",e=>{
-  const s=e.target;
-  if(!s)return;
-  if(s.matches('select[data-role="transfer-item"],select[id*="transfer"][id*="item"],select[name*="transferItem"]')){
-    filterTransferSourceContainers(s.value);
-  }
-});
-document.addEventListener("click",e=>{
-  const b=e.target.closest?.('[data-action="transfer"],[data-op="transfer"],button');
-  if(!b)return;
-  setTimeout(()=>{
-    const itemSel=document.querySelector('select[data-role="transfer-item"],select[id*="transfer"][id*="item"],select[name*="transferItem"]');
-    if(itemSel)filterTransferSourceContainers(itemSel.value);
-  },0);
-});
-
-
-document.addEventListener("change",e=>{
-  const s=e.target;
-  if(!s)return;
-  const meta=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-  if(/transfer|转移/.test(meta) && /item|物品/.test(meta)){
-    setTimeout(()=>applyTransferSourceFilter(s.value),0);
-  }
-});
-const _v39Observer=new MutationObserver(()=>{
-  const itemSel=[...document.querySelectorAll("select")].find(s=>{
-    const meta=((s.id||"")+" "+(s.name||"")+" "+(s.getAttribute("data-role")||"")+" "+(s.getAttribute("aria-label")||"")).toLowerCase();
-    return /transfer|转移/.test(meta) && /item|物品/.test(meta);
-  });
-  if(itemSel && itemSel.value) applyTransferSourceFilter(itemSel.value);
-});
-_v39Observer.observe(document.body,{childList:true,subtree:true});
 
 </script>
 
