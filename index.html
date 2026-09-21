@@ -222,12 +222,13 @@ th{font-size:12px;color:var(--muted)}
 .photo-preview img{width:90px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 .photo-note{font-size:12px;color:var(--muted)}
 
-.box-photo-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.box-photo-preview{display:flex;align-items:center;gap:8px;margin-top:8px}
-.box-photo-preview img{width:88px;height:88px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
-.box-thumb{width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:0 0 auto}
-.box-name-with-photo{display:flex;align-items:center;gap:8px;min-width:0}
-.box-name-with-photo .box-name-text{min-width:0}
+
+.container-photo-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.container-photo-preview{display:flex;align-items:center;gap:8px;margin-top:8px}
+.container-photo-preview img{width:88px;height:88px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
+.container-thumb{width:38px;height:38px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:0 0 auto}
+.container-name-with-photo{display:flex;align-items:center;gap:8px;min-width:0}
+.container-name-with-photo .container-name-text{min-width:0}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -406,7 +407,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V35</strong>
+          <strong>V36</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -806,8 +807,13 @@ function showView(id){
   renderCurrent();
 }
 
-let __pendingBoxPhoto="";
-function resizeBoxPhoto(file){
+" alt=""><span class="box-name-text">${esc(box.name||"")}</span></span>`
+    : esc(box?.name||"");
+}
+
+
+let __pendingContainerPhoto="";
+function resizeContainerPhoto(file){
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
     reader.onerror=reject;
@@ -815,13 +821,11 @@ function resizeBoxPhoto(file){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const max=1200;
-        const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+        const max=1200, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
         const c=document.createElement("canvas");
         c.width=Math.max(1,Math.round(img.naturalWidth*scale));
         c.height=Math.max(1,Math.round(img.naturalHeight*scale));
-        const ctx=c.getContext("2d");
-        ctx.drawImage(img,0,0,c.width,c.height);
+        c.getContext("2d").drawImage(img,0,0,c.width,c.height);
         resolve(c.toDataURL("image/jpeg",0.80));
       };
       img.src=reader.result;
@@ -829,11 +833,9 @@ function resizeBoxPhoto(file){
     reader.readAsDataURL(file);
   });
 }
-function boxPhotoMarkup(box){
-  const src=box?.photo||"";
-  return src
-    ? `<span class="box-name-with-photo"><img class="box-thumb" src="${src}" alt=""><span class="box-name-text">${esc(box.name||"")}</span></span>`
-    : esc(box?.name||"");
+function containerPhotoMarkup(container){
+  const src=container?.photo||"";
+  return src?`<span class="container-name-with-photo"><img class="container-thumb" src="${src}" alt=""><span class="container-name-text">${esc(container.name||"")}</span></span>`:esc(container?.name||"");
 }
 
 function renderCurrent(){
@@ -1305,6 +1307,16 @@ function openItem(id=null){
     <label>最低库存（可选）<input id="f_min" type="number" min="0" step="1" value="${Number(i?.minStock)||0}"></label>
     <label style="display:flex;align-items:center;gap:8px"><input id="f_zeroAlert" type="checkbox" ${i?.zeroStockAlert===true?"checked":""} style="width:auto"> 库存为0时提醒</label>
     <div class="muted">开启后，即使库存降到 0 也会保留物品并提醒补货；关闭且最低库存为 0 时，库存用完后自动移除物品。默认关闭。</div>
+<div class="field">
+  <label>收纳箱照片</label>
+  <div class="container-photo-row">
+    <input id="containerPhotoFile" type="file" accept="image/*" capture="environment">
+    <button type="button" class="secondary" id="containerPhotoGallery">从图库选择</button>
+  </div>
+  <div id="containerPhotoPreview" class="container-photo-preview"></div>
+  <button type="button" class="secondary hidden" id="containerPhotoRemove">删除照片</button>
+</div>
+
     <label>物品状态检查周期<select id="f_checkInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
     <div class="muted">主要检查变质、虫害、受潮、包装破损、漏液和异常气味。设置周期后，保存当天视为首次检查已完成。</div>
     ${i?"":
@@ -1911,7 +1923,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=35").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=36").catch(() => {});
   });
 }
 
@@ -1932,30 +1944,29 @@ document.addEventListener('click',e=>{
   if(e.target?.id==='removeItemPhoto'){window.__editingItemPhoto='';const p=document.getElementById('itemPhotoPreview');if(p)p.innerHTML='<span class="photo-note">未添加照片</span>';e.target.classList.add('hidden');}
 });
 
+
 document.addEventListener("change", async e=>{
-  if(e.target && e.target.id==="boxPhotoFile"){
+  if(e.target && e.target.id==="containerPhotoFile"){
     const f=e.target.files?.[0]; if(!f)return;
     try{
-      __pendingBoxPhoto=await resizeBoxPhoto(f);
-      const p=document.getElementById("boxPhotoPreview");
-      if(p)p.innerHTML=`<img src="${__pendingBoxPhoto}" alt="箱子照片">`;
-      const r=document.getElementById("boxPhotoRemove");
+      __pendingContainerPhoto=await resizeContainerPhoto(f);
+      const p=document.getElementById("containerPhotoPreview");
+      if(p)p.innerHTML=`<img src="${__pendingContainerPhoto}" alt="收纳箱照片">`;
+      const r=document.getElementById("containerPhotoRemove");
       if(r)r.classList.remove("hidden");
-    }catch(err){
-      if(typeof toast==="function")toast("照片处理失败");
-    }
+    }catch(err){ if(typeof toast==="function")toast("照片处理失败"); }
   }
 });
 document.addEventListener("click",e=>{
-  if(e.target && e.target.id==="boxPhotoGallery"){
-    const f=document.getElementById("boxPhotoFile");
+  if(e.target && e.target.id==="containerPhotoGallery"){
+    const f=document.getElementById("containerPhotoFile");
     if(f){f.removeAttribute("capture");f.click();}
   }
-  if(e.target && e.target.id==="boxPhotoRemove"){
-    __pendingBoxPhoto="";
-    const p=document.getElementById("boxPhotoPreview"); if(p)p.innerHTML="";
+  if(e.target && e.target.id==="containerPhotoRemove"){
+    __pendingContainerPhoto="";
+    const p=document.getElementById("containerPhotoPreview"); if(p)p.innerHTML="";
     e.target.classList.add("hidden");
-    const f=document.getElementById("boxPhotoFile"); if(f)f.value="";
+    const f=document.getElementById("containerPhotoFile"); if(f)f.value="";
   }
 });
 
