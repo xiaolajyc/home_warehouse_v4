@@ -375,7 +375,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V31</strong>
+          <strong>V32</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -1300,9 +1300,20 @@ function openBatchAddToContainer(containerId){
     <div class="notice">每行一个物品。支持直接复制粘贴，例如：<br>胶带 3<br>垃圾袋\t10<br>螺丝 × 20<br>也可以使用“物品名称,数量”。</div>
     <label>物品清单<textarea id="batchText" rows="12" placeholder="胶带 3\n垃圾袋 10\n螺丝 × 20"></textarea></label>
     <label>默认最低库存（可选）<input id="batchMin" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
-    ${modalFormButtons("批量新增")}
+    <label style="display:flex;align-items:center;gap:8px"><input id="batchZeroAlert" type="checkbox" style="width:auto"> 库存为0时提醒</label>
+    <div class="muted">开启后，物品库存降到 0 时仍保留并提醒；默认关闭。</div>
+    <label>默认物品状态检查周期<select id="batchCheckInterval"><option value="none">不检查</option><option value="1">每1个月</option><option value="3">每3个月</option><option value="6">每6个月</option><option value="12">每12个月</option><option value="24">每24个月</option></select></label>
+    <div class="muted">设置后，新建物品当天视为首次检查已完成。已有物品的检查设置不会被批量入库覆盖。</div>
+    <label>默认标签（逗号分隔）<input id="batchTags" placeholder="例如：厨房, 食品"></label>
+    <label>默认备注<textarea id="batchNotes" rows="3" placeholder="例如：长期储存；注意防潮"></textarea></label>
+    <div class="muted">以上属性仅用于本次批量新增中“尚不存在”的物品；已有物品保留原来的设置。</div>
+    ${modalFormButtons("批量新增") }
   `,()=>{
     const parsed=parseBatchItems($("#batchText").value),min=Math.max(0,Math.round(Number($("#batchMin").value)||0));
+    const zeroAlert=$("#batchZeroAlert").checked;
+    const checkInterval=$("#batchCheckInterval").value;
+    const batchTags=$("#batchTags").value.split(/[，,]/).map(x=>x.trim()).filter(Boolean);
+    const batchNotes=$("#batchNotes").value.trim();
     if(!parsed.length)throw Error("请粘贴物品清单");
     const bad=parsed.filter(r=>r.error);
     if(bad.length)throw Error(`无法识别这些行：${bad.map(r=>`“${r.error}”`).join("、")}。请使用“物品名称 数量”格式。`);
@@ -1310,7 +1321,12 @@ function openBatchAddToContainer(containerId){
     parsed.forEach(r=>{
       if(!r.name||r.qty<=0)return;
       let i=db.items.find(x=>x.name.trim().toLowerCase()===r.name.trim().toLowerCase());
-      if(!i){i={id:uid("it"),name:r.name,variant:"",unit:"件",minStock:min,zeroStockAlert:false,tags:[],notes:"",createdAt:iso()};db.items.push(i);log("MASTER","批量新增物品",{itemId:i.id,containerId,quantity:r.qty,unit:i.unit,notes:"批量粘贴导入"});}
+      if(!i){
+        i={id:uid("it"),name:r.name,variant:"",unit:"件",minStock:min,zeroStockAlert:zeroAlert,tags:[...batchTags],notes:batchNotes,createdAt:iso()};
+        db.items.push(i);
+        if(checkInterval!=="none")ensureCheckSchedule("item",i.id,checkInterval);
+        log("MASTER","批量新增物品",{itemId:i.id,containerId,quantity:r.qty,unit:i.unit,notes:"批量粘贴导入"});
+      }
       else if(min>0&&!Number(i.minStock))i.minStock=min;
       let row=db.containerItems.find(x=>x.containerId===containerId&&x.itemId===i.id);
       if(!row){row={id:uid("ci"),containerId,itemId:i.id,quantity:0,unit:i.unit,notes:""};db.containerItems.push(row)}
@@ -1759,7 +1775,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=31").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=32").catch(() => {});
   });
 }
 </script>
