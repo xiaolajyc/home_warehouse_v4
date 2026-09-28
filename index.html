@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>家庭仓库 / 收纳箱管理</title>
 <style>
 :root{
@@ -244,6 +244,10 @@ th{font-size:12px;color:var(--muted)}
 
 .search-result-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .search-result-actions button{font-size:12px;padding:5px 8px}
+
+/* V41: disable all page zoom / pinch zoom */
+html,body{touch-action:manipulation;-ms-touch-action:manipulation;overscroll-behavior-x:none}
+input,select,textarea,button{touch-action:manipulation}
 </style>
 
 <link rel="manifest" href="manifest.webmanifest">
@@ -422,7 +426,7 @@ th{font-size:12px;color:var(--muted)}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V40</strong>
+          <strong>V41</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -1966,7 +1970,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=40").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=41").catch(() => {});
   });
 }
 
@@ -2134,6 +2138,13 @@ document.addEventListener("click",e=>{
 
 
 
+
+/* V41: prevent gesture/pinch/double-tap zoom */
+document.addEventListener("gesturestart",e=>e.preventDefault(),{passive:false});
+document.addEventListener("gesturechange",e=>e.preventDefault(),{passive:false});
+document.addEventListener("gestureend",e=>e.preventDefault(),{passive:false});
+let __v41LastTouchEnd=0;
+document.addEventListener("touchend",e=>{const n=Date.now();if(n-__v41LastTouchEnd<=300)e.preventDefault();__v41LastTouchEnd=n},{passive:false});
 </script>
 
 <div id="photoLightbox" class="photo-lightbox" aria-hidden="true">
