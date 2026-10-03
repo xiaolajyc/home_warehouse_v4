@@ -450,6 +450,7 @@ input,select,textarea,button{touch-action:manipulation}
         </div>
         <label class="sync-check"><input id="driveAutoSync" type="checkbox"> 数据修改后自动同步</label>
         <div id="driveHint" class="muted">同步文件只保存本应用的仓库 JSON 数据；不会上传其他 Drive 文件。</div>
+        <div class="muted" style="margin-top:8px">V46：本地数据使用 IndexedDB 保存；照片单独保存为 Blob。旧照片如未正常迁移，会优先尝试从迁移备份自动修复。</div>
       </div>
       <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
         <div class="card">
@@ -635,10 +636,13 @@ async function persistDbToIndexedDB(){
       if(blob){c.photoId=id;const target=state.containers.find(x=>x.id===c.id);if(target)target.photoId=id;photos.push({id,ownerType:"container",ownerId:c.id,blob})}
     }else{delete c.photoId;const target=state.containers.find(x=>x.id===c.id);if(target)delete target.photoId}
   }
+  // Read existing photo keys before opening the write transaction. Safari can auto-close
+  // an IndexedDB readwrite transaction if an await yields while it is active.
+  const keyTx=idb.transaction("photos","readonly");
+  const existing=await idbRequest(keyTx.objectStore("photos").getAllKeys());
   const tx=idb.transaction(["state","photos"],"readwrite");
   tx.objectStore("state").put(state,IDB_STATE_KEY);
   const ps=tx.objectStore("photos");
-  const existing=await idbRequest(ps.getAllKeys());
   const keep=new Set(photos.map(x=>x.id));
   existing.forEach(k=>{if(!keep.has(k))ps.delete(k)});
   photos.forEach(ph=>ps.put(ph));
@@ -651,8 +655,12 @@ async function migrateLocalStorageToIndexedDB(idb){
   legacy.containers.forEach(c=>{if(!c.photo&&Array.isArray(c.photos))c.photo=c.photos[0]||""});
   normalizeDbObject(legacy);
   db=legacy;
+  // Keep a one-time recovery copy until the new IndexedDB state has been verified.
+  try{localStorage.setItem(KEY+"-backup",JSON.stringify(legacy))}catch(_){ }
   await persistDbToIndexedDB();
-  try{localStorage.setItem(KEY+"-migrated",iso());localStorage.removeItem(KEY)}catch(_){ }
+  // Do not delete the legacy database immediately. It is retained as a small emergency
+  // recovery source, especially for older photo data, until the user explicitly resets data.
+  try{localStorage.setItem(KEY+"-migrated",iso())}catch(_){ }
   return db;
 }
 function normalizeDbObject(x){
@@ -662,6 +670,39 @@ function normalizeDbObject(x){
   x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));if(!ci.updatedAt)ci.updatedAt=iso()});
   if(!Array.isArray(x.transactions))x.transactions=[];if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];
 }
+async function repairMissingPhotosFromLegacy(idb,data){
+  let legacy=null;
+  try{legacy=JSON.parse(localStorage.getItem(KEY+"-backup")||localStorage.getItem(KEY)||"null")}catch(_){legacy=null}
+  if(!legacy)return false;
+  let repaired=false;
+  const photoJobs=[];
+  const oldItems=new Map(arr(legacy.items).map(x=>[x.id,x]));
+  const oldContainers=new Map(arr(legacy.containers).map(x=>[x.id,x]));
+  for(const i of arr(data.items)){
+    if(i.photoId){const existing=await readPhoto(idb,i.photoId);if(existing?.blob)continue;}
+    const old=oldItems.get(i.id);
+    if(old?.photo){
+      const blob=await blobFromPhoto(old.photo);
+      if(blob){const id=i.photoId||uid("photo");i.photoId=id;photoJobs.push({id,ownerType:"item",ownerId:i.id,blob});repaired=true;}
+    }
+  }
+  for(const c of arr(data.containers)){
+    if(c.photoId){const existing=await readPhoto(idb,c.photoId);if(existing?.blob)continue;}
+    const old=oldContainers.get(c.id);
+    const oldPhoto=old?.photo||(Array.isArray(old?.photos)?old.photos[0]:"");
+    if(oldPhoto){
+      const blob=await blobFromPhoto(oldPhoto);
+      if(blob){const id=c.photoId||uid("photo");c.photoId=id;photoJobs.push({id,ownerType:"container",ownerId:c.id,blob});repaired=true;}
+    }
+  }
+  if(photoJobs.length){
+    const tx=idb.transaction(["state","photos"],"readwrite");
+    tx.objectStore("state").put(cloneWithoutPhotoFields(data),IDB_STATE_KEY);
+    const ps=tx.objectStore("photos");photoJobs.forEach(ph=>ps.put(ph));
+    await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error("照片修复失败"));tx.onabort=()=>reject(tx.error||new Error("照片修复中止"))});
+  }
+  return repaired;
+}
 async function initStorage(){
   storageInitPromise=storageInitPromise|| (async()=>{
     const idb=await openWarehouseDB();
@@ -669,7 +710,11 @@ async function initStorage(){
     if(!state){
       state=await migrateLocalStorageToIndexedDB(idb);
       if(!state){db=seed();await persistDbToIndexedDB()}
-    }else{db=state;normalizeDbObject(db);await hydratePhotos(idb,db)}
+    }else{
+      db=state;normalizeDbObject(db);
+      await repairMissingPhotosFromLegacy(idb,db);
+      await hydratePhotos(idb,db);
+    }
     normalizeDbObject(db);storageReady=true;renderAll();updateSyncUI();
   })();
   return storageInitPromise;
