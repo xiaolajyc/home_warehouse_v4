@@ -426,7 +426,7 @@ input,select,textarea,button{touch-action:manipulation}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V42</strong>
+          <strong>V43</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -1513,6 +1513,8 @@ function openContainerBatchMinStock(containerId){
   openModal(`批量设置最低库存 · ${c.name}`,`
     <div class="notice">选择箱内需要设置的物品，然后输入统一的最低库存。此设置作用于这些物品本身，之后在其他收纳箱中的库存也会使用这个最低库存。</div>
     <label>最低库存<input id="batchMinStockValue" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
+    <label style="display:flex;align-items:center;gap:8px"><input id="batchMinZeroAlert" type="checkbox" style="width:auto"> 库存为0时提醒</label>
+    <div class="muted">开启后，即使库存降到 0，也会保留这些物品并提醒补货；关闭且最低库存为 0 时，库存用完后自动移除物品。</div>
     <div class="actions"><button type="button" class="ghost" id="batchMinSelectAll">全选</button><button type="button" class="ghost" id="batchMinSelectNone">取消全选</button></div>
     <div class="list" style="max-height:45vh;overflow:auto">
       ${rows.map(x=>{const i=item(x.itemId);return `<label class="item" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start"><input type="checkbox" class="batchMinCheck" value="${esc(x.itemId)}" checked style="margin-top:3px"><span style="min-width:0;display:block;overflow-wrap:anywhere"><b style="display:block;line-height:1.4">${esc(i?.name||"未知物品")}</b><span class="muted">当前最低库存：${esc(Number(i?.minStock)||0)} ${esc(i?.unit||x.unit||"")} · 箱内库存：${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}</span></span></label>`}).join("")}
@@ -1522,10 +1524,12 @@ function openContainerBatchMinStock(containerId){
     const selected=[...$$('.batchMinCheck:checked')].map(x=>x.value);
     if(!selected.length)throw Error("请至少选择一个物品");
     const min=Math.max(0,Math.round(Number($("#batchMinStockValue").value)||0));
+    const zeroAlert=$("#batchMinZeroAlert").checked;
     selected.forEach(itemId=>{
       const i=item(itemId);if(!i)return;
       i.minStock=min;
-      log("MASTER","批量设置最低库存",{itemId,containerId,notes:`最低库存设为 ${min} ${i.unit||""}`});
+      i.zeroStockAlert=zeroAlert;
+      log("MASTER","批量设置最低库存",{itemId,containerId,notes:`最低库存设为 ${min} ${i.unit||""}；库存为0时提醒：${zeroAlert?"开启":"关闭"}`});
     });
     closeModal();renderAll();toast(`已设置 ${selected.length} 个物品的最低库存为 ${min}`);
   });
