@@ -426,7 +426,7 @@ input,select,textarea,button{touch-action:manipulation}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V43</strong>
+          <strong>V47</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -450,6 +450,7 @@ input,select,textarea,button{touch-action:manipulation}
         </div>
         <label class="sync-check"><input id="driveAutoSync" type="checkbox"> 数据修改后自动同步</label>
         <div id="driveHint" class="muted">同步文件只保存本应用的仓库 JSON 数据；不会上传其他 Drive 文件。</div>
+        <div class="muted" style="margin-top:8px">V47：IndexedDB 主数据库；照片独立保存为 Blob。启动时会检查并修复历史照片，旧数据不会在迁移成功前删除。</div>
       </div>
       <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
         <div class="card">
@@ -562,25 +563,184 @@ function seed(){
   };
 }
 
-function load(){
-  try{
-    const x=JSON.parse(localStorage.getItem(KEY)||"null");
-    if(!x || x.version!==1 || !Array.isArray(x.locations) || !Array.isArray(x.containers) || !Array.isArray(x.items) || !Array.isArray(x.containerItems)) return seed();
-    x.items.forEach(i=>{
-      i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));
-      i.zeroStockAlert=i.zeroStockAlert===true;
-    });
-    x.containerItems.forEach(ci=>{
-      ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));
-      ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));
-      if(!ci.updatedAt)ci.updatedAt=iso();
-    });
-    if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];
-    if(!Array.isArray(x.checkRecords))x.checkRecords=[];
-    x.checkSchedules=x.checkSchedules.filter(s=>s&&s.targetType&&s.targetId);
-    return x;
-  }catch(e){ return seed(); }
+const IDB_NAME = "home-warehouse-idb-v1";
+const IDB_VERSION = 2;
+const IDB_STATE_KEY = "main";
+let storageReady = false;
+let storageInitPromise = null;
+let photoObjectUrls = new Map();
+
+function openWarehouseDB(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(IDB_NAME,IDB_VERSION);
+    req.onupgradeneeded=()=>{
+      const d=req.result;
+      if(!d.objectStoreNames.contains("state"))d.createObjectStore("state");
+      if(!d.objectStoreNames.contains("photos"))d.createObjectStore("photos",{keyPath:"id"});
+      if(!d.objectStoreNames.contains("legacy"))d.createObjectStore("legacy",{keyPath:"id"});
+    };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error||new Error("IndexedDB 打开失败"));
+  });
 }
+function idbRequest(req){return new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error("IndexedDB 请求失败"))})}
+function dataUrlToBlob(src){
+  if(typeof src!=="string"||!src.startsWith("data:"))return null;
+  const [head,data]=src.split(",",2);const mime=(head.match(/data:([^;]+)/)||[])[1]||"image/jpeg";
+  const bin=atob(data||"");const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return new Blob([bytes],{type:mime});
+}
+async function blobFromPhoto(src){
+  if(!src)return null;
+  if(src instanceof Blob)return src;
+  const b=dataUrlToBlob(src);if(b)return b;
+  if(typeof src==="string" && src.startsWith("blob:")){try{return await (await fetch(src)).blob()}catch(_){return null}}
+  return null;
+}
+function cloneWithoutPhotoFields(source){
+  const x=JSON.parse(JSON.stringify(source));
+  x.items.forEach(i=>{delete i.photo;});
+  x.containers.forEach(c=>{delete c.photo;delete c.photos;});
+  return x;
+}
+async function readIdbState(idb){
+  const tx=idb.transaction("state","readonly");const store=tx.objectStore("state");return await idbRequest(store.get(IDB_STATE_KEY));
+}
+async function readPhoto(idb,id){
+  if(!id)return null;const tx=idb.transaction("photos","readonly");return await idbRequest(tx.objectStore("photos").get(id));
+}
+async function hydratePhotos(idb,data){
+  const jobs=[];
+  for(const i of arr(data.items)){
+    if(i.photoId){jobs.push(readPhoto(idb,i.photoId).then(r=>{if(r?.blob){const u=URL.createObjectURL(r.blob);photoObjectUrls.set(i.photoId,u);i.photo=u;}}))}
+  }
+  for(const c of arr(data.containers)){
+    if(c.photoId){jobs.push(readPhoto(idb,c.photoId).then(r=>{if(r?.blob){const u=URL.createObjectURL(r.blob);photoObjectUrls.set(c.photoId,u);c.photo=u;}}))}
+  }
+  await Promise.all(jobs);
+  return data;
+}
+async function persistDbToIndexedDB(){
+  if(!db)return;
+  const idb=await openWarehouseDB();
+  const state=cloneWithoutPhotoFields(db);
+  const photoWrites=[];
+  const photoDeletes=[];
+  // Important: an object may have a photoId but no hydrated `photo` URL. Never
+  // interpret that as "delete the photo". This was the main source of photo loss.
+  for(const i of db.items){
+    if(i.photo){
+      const id=i.photoId||uid("photo");const blob=await blobFromPhoto(i.photo);
+      if(blob){i.photoId=id;const target=state.items.find(x=>x.id===i.id);if(target)target.photoId=id;photoWrites.push({id,ownerType:"item",ownerId:i.id,blob})}
+    }else if(i.photo === "" && i.photoId){
+      const id=i.photoId;delete i.photoId;const target=state.items.find(x=>x.id===i.id);if(target)delete target.photoId;photoDeletes.push(id)
+    }else if(i.photoId){
+      const target=state.items.find(x=>x.id===i.id);if(target)target.photoId=i.photoId;
+    }
+  }
+  for(const c of db.containers){
+    if(c.photo){
+      const id=c.photoId||uid("photo");const blob=await blobFromPhoto(c.photo);
+      if(blob){c.photoId=id;const target=state.containers.find(x=>x.id===c.id);if(target)target.photoId=id;photoWrites.push({id,ownerType:"container",ownerId:c.id,blob})}
+    }else if(c.photo === "" && c.photoId){
+      const id=c.photoId;delete c.photoId;const target=state.containers.find(x=>x.id===c.id);if(target)delete target.photoId;photoDeletes.push(id)
+    }else if(c.photoId){
+      const target=state.containers.find(x=>x.id===c.id);if(target)target.photoId=c.photoId;
+    }
+  }
+  const tx=idb.transaction(["state","photos"],"readwrite");
+  tx.objectStore("state").put(state,IDB_STATE_KEY);
+  const ps=tx.objectStore("photos");
+  photoWrites.forEach(ph=>ps.put(ph));
+  photoDeletes.forEach(id=>ps.delete(id));
+  await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error("IndexedDB 保存失败"));tx.onabort=()=>reject(tx.error||new Error("IndexedDB 保存中止"))});
+}
+async function migrateLocalStorageToIndexedDB(idb){
+  let legacy=null;
+  try{legacy=JSON.parse(localStorage.getItem(KEY)||"null")}catch(_){legacy=null}
+  if(!legacy||legacy.version!==1)return null;
+  legacy.containers.forEach(c=>{if(!c.photo&&Array.isArray(c.photos))c.photo=c.photos[0]||""});
+  normalizeDbObject(legacy);
+  db=legacy;
+  // Keep a one-time recovery copy until the new IndexedDB state has been verified.
+  try{localStorage.setItem(KEY+"-backup",JSON.stringify(legacy))}catch(_){ }
+  await storeLegacySnapshot(idb, legacy);
+  await persistDbToIndexedDB();
+  // Do not delete the legacy database immediately. It is retained as a small emergency
+  // recovery source, especially for older photo data, until the user explicitly resets data.
+  try{localStorage.setItem(KEY+"-migrated",iso())}catch(_){ }
+  return db;
+}
+function normalizeDbObject(x){
+  if(!x||x.version!==1)return;
+  if(!Array.isArray(x.locations))x.locations=[];if(!Array.isArray(x.containers))x.containers=[];if(!Array.isArray(x.items))x.items=[];if(!Array.isArray(x.containerItems))x.containerItems=[];
+  x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});
+  x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));if(!ci.updatedAt)ci.updatedAt=iso()});
+  if(!Array.isArray(x.transactions))x.transactions=[];if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];
+}
+async function storeLegacySnapshot(idb, legacy){
+  if(!legacy)return;
+  try{
+    const tx=idb.transaction("legacy","readwrite");
+    tx.objectStore("legacy").put({id:"legacy-v1",data:legacy,savedAt:iso()});
+    await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)});
+  }catch(e){console.warn("保存旧数据快照失败",e)}
+}
+async function readLegacySnapshot(idb){
+  try{const tx=idb.transaction("legacy","readonly");return await idbRequest(tx.objectStore("legacy").get("legacy-v1"))}catch(_){return null}
+}
+async function legacySources(idb){
+  const out=[];
+  try{const x=JSON.parse(localStorage.getItem(KEY+"-backup")||"null");if(x)out.push(x)}catch(_){ }
+  try{const x=JSON.parse(localStorage.getItem(KEY)||"null");if(x)out.push(x)}catch(_){ }
+  const snap=await readLegacySnapshot(idb);if(snap?.data)out.push(snap.data);
+  return out;
+}
+async function repairMissingPhotosFromLegacy(idb,data){
+  const sources=await legacySources(idb);
+  if(!sources.length)return false;
+  let repaired=false;
+  const byItem=new Map(),byContainer=new Map();
+  for(const legacy of sources){
+    for(const x of arr(legacy.items))if(x?.id && (x.photo || x.photoId))byItem.set(x.id,x);
+    for(const x of arr(legacy.containers))if(x?.id && (x.photo || x.photos || x.photoId))byContainer.set(x.id,x);
+  }
+  const photoJobs=[];
+  for(const i of arr(data.items)){
+    if(i.photoId){const existing=await readPhoto(idb,i.photoId);if(existing?.blob)continue;}
+    const old=byItem.get(i.id); if(old?.photo){const blob=await blobFromPhoto(old.photo);if(blob){const id=i.photoId||uid("photo");i.photoId=id;photoJobs.push({id,ownerType:"item",ownerId:i.id,blob});repaired=true;}}
+  }
+  for(const c of arr(data.containers)){
+    if(c.photoId){const existing=await readPhoto(idb,c.photoId);if(existing?.blob)continue;}
+    const old=byContainer.get(c.id);const oldPhoto=old?.photo||(Array.isArray(old?.photos)?old.photos[0]:"");
+    if(oldPhoto){const blob=await blobFromPhoto(oldPhoto);if(blob){const id=c.photoId||uid("photo");c.photoId=id;photoJobs.push({id,ownerType:"container",ownerId:c.id,blob});repaired=true;}}
+  }
+  if(photoJobs.length){
+    const tx=idb.transaction(["state","photos"],"readwrite");
+    tx.objectStore("state").put(cloneWithoutPhotoFields(data),IDB_STATE_KEY);
+    const ps=tx.objectStore("photos");photoJobs.forEach(ph=>ps.put(ph));
+    await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error("照片修复失败"));tx.onabort=()=>reject(tx.error||new Error("照片修复中止"))});
+  }
+  return repaired;
+}
+async function initStorage(){
+  storageInitPromise=storageInitPromise|| (async()=>{
+    const idb=await openWarehouseDB();
+    let state=await readIdbState(idb);
+    if(!state){
+      state=await migrateLocalStorageToIndexedDB(idb);
+      if(!state){db=seed();await persistDbToIndexedDB()}
+      else {db=state;normalizeDbObject(db);await repairMissingPhotosFromLegacy(idb,db);await hydratePhotos(idb,db)}
+    }else{
+      db=state;normalizeDbObject(db);
+      await repairMissingPhotosFromLegacy(idb,db);
+      await hydratePhotos(idb,db);
+    }
+    normalizeDbObject(db);storageReady=true;renderAll();updateSyncUI();
+  })();
+  return storageInitPromise;
+}
+
 const SYNC_KEY = "home-warehouse-drive-sync-v1";
 const DRIVE_CLIENT_ID = "801960562511-e0uq3cn1hcutj91g3gesqvsulpj3biv9.apps.googleusercontent.com";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -662,9 +822,14 @@ async function findDriveFile(){
   const res=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=10`);
   const data=await res.json();return data.files?.[0]||null;
 }
-function syncPayload(){
-  return {schema:1,app:"home-warehouse",updatedAt:iso(),deviceId:getDeviceId(),data:db};
+async function syncPayload(){
+  const data=cloneWithoutPhotoFields(db);
+  const photos={};
+  for(const i of db.items){if(i.photo&&i.photoId){const b=await blobFromPhoto(i.photo);if(b)photos[i.photoId]=await blobToDataUrl(b)}}
+  for(const c of db.containers){if(c.photo&&c.photoId){const b=await blobFromPhoto(c.photo);if(b)photos[c.photoId]=await blobToDataUrl(b)}}
+  return {schema:2,app:"home-warehouse",updatedAt:iso(),deviceId:getDeviceId(),data,photos};
 }
+function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error||new Error("照片读取失败"));r.readAsDataURL(blob)})}
 function getDeviceId(){
   const k="home-warehouse-device-id";let v=localStorage.getItem(k);if(v)return v;v=uid("device");localStorage.setItem(k,v);return v;
 }
@@ -688,21 +853,21 @@ async function readDriveFile(fileId){
 }
 function validateCloudPayload(x){
   const d=x?.data;
-  return !!(x&&x.schema===1&&x.app==="home-warehouse"&&d&&d.version===1&&Array.isArray(d.locations)&&Array.isArray(d.containers)&&Array.isArray(d.items)&&Array.isArray(d.containerItems));
+  return !!(x&&(x.schema===1||x.schema===2)&&x.app==="home-warehouse"&&d&&d.version===1&&Array.isArray(d.locations)&&Array.isArray(d.containers)&&Array.isArray(d.items)&&Array.isArray(d.containerItems));
 }
-function applyCloudData(cloud){
+async function applyCloudData(cloud){
   suppressAutoSync=true;
   try{
-    db=cloud.data;normalizeDb();localStorage.setItem(KEY,JSON.stringify(db));
+    db=cloud.data;normalizeDb();
+    if(cloud.schema===2&&cloud.photos){
+      for(const i of db.items){if(i.photoId&&cloud.photos[i.photoId])i.photo=cloud.photos[i.photoId]}
+      for(const c of db.containers){if(c.photoId&&cloud.photos[c.photoId])c.photo=cloud.photos[c.photoId]}
+    }
+    await persistDbToIndexedDB();
   }finally{suppressAutoSync=false}
   renderAll();
 }
-function normalizeDb(){
-  if(!db||db.version!==1)return;
-  db.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});
-  db.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));if(!ci.updatedAt)ci.updatedAt=iso()});
-  if(!Array.isArray(db.transactions))db.transactions=[];if(!Array.isArray(db.locations))db.locations=[];if(!Array.isArray(db.containers))db.containers=[];if(!Array.isArray(db.items))db.items=[];if(!Array.isArray(db.containerItems))db.containerItems=[];
-}
+function normalizeDb(){normalizeDbObject(db)}
 async function connectDrive(){
   driveSyncBusy=true;updateSyncUI("正在连接 Google Drive…");
   setSyncProgress(8,"正在请求 Google 授权…");
@@ -728,7 +893,7 @@ async function uploadOrSyncDrive(interactive=true){
     let f=syncMeta.fileId?{id:syncMeta.fileId,modifiedTime:syncMeta.lastCloudModifiedTime}:await findDriveFile();
     if(!f)f=await findDriveFile();
     setSyncProgress(48,"正在整理本地数据…");
-    const payload=syncPayload();
+    const payload=await syncPayload();
     let result;
     setSyncProgress(60,f?.id?"正在上传更新…":"正在创建云端仓库…");
     if(f?.id){
@@ -761,7 +926,7 @@ async function restoreFromDrive(interactive=true){
     if(!validateCloudPayload(cloud))throw new Error("云端仓库文件格式不正确，未恢复本地数据。");
     if(!confirm("从云端恢复会覆盖本设备当前仓库数据，确定继续吗？"))return;
     setSyncProgress(82,"正在验证云端数据…");
-    applyCloudData(cloud);syncMeta.connected=true;syncMeta.fileId=f.id;syncMeta.lastSyncAt=iso();syncMeta.lastCloudModifiedTime=f.modifiedTime||cloud.updatedAt||"";saveSyncMeta();
+    await applyCloudData(cloud);syncMeta.connected=true;syncMeta.fileId=f.id;syncMeta.lastSyncAt=iso();syncMeta.lastCloudModifiedTime=f.modifiedTime||cloud.updatedAt||"";saveSyncMeta();
     setSyncProgress(100,"恢复完成");updateSyncUI("云端数据已恢复到本设备");toast("已从 Google Drive 恢复");
     syncProgressTimer=setTimeout(clearSyncProgress,900);
   }catch(e){setSyncProgress(100,"恢复失败");updateSyncUI(`恢复失败：${e.message}`);if(interactive)alert(e.message);syncProgressTimer=setTimeout(clearSyncProgress,1800)}
@@ -775,8 +940,22 @@ function disconnectDrive(){
   driveAccessToken="";driveTokenExpiresAt=0;syncMeta={connected:false,fileId:"",lastSyncAt:syncMeta.lastSyncAt||"",lastCloudModifiedTime:"",autoSync:false};saveSyncMeta();updateSyncUI("已断开 Google Drive。浏览器本地数据不会被删除。");toast("已断开 Google Drive");
 }
 
-function save(){localStorage.setItem(KEY,JSON.stringify(db));scheduleDriveAutoSync()}
-db=load();
+async function recompressDataUrl(src,max=480,quality=0.55){
+  if(!src||typeof src!=="string"||!src.startsWith("data:image/"))return src;
+  return await new Promise(resolve=>{const img=new Image();let done=false;const finish=v=>{if(done)return;done=true;resolve(v||src)};img.onerror=()=>finish(src);img.onload=()=>{try{const scale=Math.min(1,max/Math.max(img.naturalWidth||1,img.naturalHeight||1));if(scale>=1&&src.length<120000){finish(src);return}const c=document.createElement("canvas");c.width=Math.max(1,Math.round((img.naturalWidth||1)*scale));c.height=Math.max(1,Math.round((img.naturalHeight||1)*scale));c.getContext("2d").drawImage(img,0,0,c.width,c.height);finish(c.toDataURL("image/jpeg",quality))}catch(_){finish(src)}};img.src=src})
+}
+let saveTimer=null,saveBusy=false,saveAgain=false;
+async function save(){
+  if(!storageReady||!db)return;
+  saveAgain=true;
+  if(saveBusy)return;
+  saveBusy=true;
+  try{
+    while(saveAgain){saveAgain=false;await persistDbToIndexedDB()}
+    scheduleDriveAutoSync();
+  }catch(e){toast("本地数据库保存失败，请重试");console.error(e)}
+  finally{saveBusy=false}
+}
 
 function location(id){return db.locations.find(x=>x.id===id)}
 function container(id){return db.containers.find(x=>x.id===id)}
@@ -835,14 +1014,14 @@ function resizeBoxPhoto(file){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const max=1200;
+        const max=480;
         const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
         const c=document.createElement("canvas");
         c.width=Math.max(1,Math.round(img.naturalWidth*scale));
         c.height=Math.max(1,Math.round(img.naturalHeight*scale));
         const ctx=c.getContext("2d");
         ctx.drawImage(img,0,0,c.width,c.height);
-        resolve(c.toDataURL("image/jpeg",0.80));
+        resolve(c.toDataURL("image/jpeg",0.55));
       };
       img.src=reader.result;
     };
@@ -868,8 +1047,9 @@ function renderCurrent(){
 }
 
 function renderAll(){
-  save();
+  if(!storageReady||!db)return;
   renderDashboard();renderContainers();renderItems();renderLocations();renderHistory();renderChecks();
+  save();
 }
 
 function renderDashboard(){
@@ -1048,12 +1228,12 @@ function resizeItemPhoto(file){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const max=700, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+        const max=480, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
         const c=document.createElement('canvas');
         c.width=Math.max(1,Math.round(img.naturalWidth*scale));
         c.height=Math.max(1,Math.round(img.naturalHeight*scale));
         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        resolve(c.toDataURL('image/jpeg',0.72));
+        resolve(c.toDataURL('image/jpeg',0.55));
       };
       img.src=reader.result;
     };
@@ -1951,9 +2131,10 @@ $("#containerFilter")?.addEventListener("input",renderContainers);
 $("#itemFilter")?.addEventListener("input",renderItems);
 $("#checkFilter")?.addEventListener("change",renderChecks);
 
-function exportJson(){
-  const blob=new Blob([JSON.stringify(db,null,2)],{type:"application/json"});
-  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`home-warehouse-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);toast("备份已导出");
+async function exportJson(){
+  const payload=await syncPayload();
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`home-warehouse-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast("备份已导出");
 }
 function restoreInput(){ $("#restoreInput").click() }
 $("#backupBtn")?.addEventListener("click",exportJson);$("#backupBtn2")?.addEventListener("click",exportJson);
@@ -1961,12 +2142,13 @@ $("#restoreBtn")?.addEventListener("click",restoreInput);$("#restoreBtn2")?.addE
 $("#restoreInput").addEventListener("change",e=>{
   const file=e.target.files[0];if(!file)return;
   const r=new FileReader();
-  r.onload=()=>{
+  r.onload=async()=>{
     try{
-      const x=JSON.parse(r.result);
+      let x=JSON.parse(r.result);
+      if(x?.app==="home-warehouse"&&x.data)x=x.data;
       if(x.version!==1||!Array.isArray(x.locations)||!Array.isArray(x.containers)||!Array.isArray(x.items)||!Array.isArray(x.containerItems))throw Error();
       if(!confirm("恢复备份会覆盖当前浏览器数据，确定继续吗？"))return;
-      x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));});if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];db=x;save();renderAll();toast("备份已恢复");
+      x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));});if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];db=x;await save();renderAll();toast("备份已恢复");
     }catch(err){alert("无效的 V1 JSON 备份")}
   };
   r.readAsText(file);e.target.value="";
@@ -1986,8 +2168,7 @@ $("#allItemsBtn")?.addEventListener("click",()=>{
   $("#lowOnlyBtn")?.classList.remove("active");
   renderItems();
 });
-renderAll();
-updateSyncUI();
+initStorage().catch(e=>{console.error(e);alert("本地数据库初始化失败："+(e.message||e));});
 $("#driveConnectBtn")?.addEventListener("click",()=>connectDrive());
 $("#driveDisconnectBtn")?.addEventListener("click",disconnectDrive);
 $("#driveSyncBtn")?.addEventListener("click",()=>uploadOrSyncDrive(true));
@@ -2001,7 +2182,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=42").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=47").catch(() => {});
   });
 }
 
@@ -2058,13 +2239,13 @@ async function resizeContainerPhotoFile(file){
       const img=new Image();
       img.onerror=reject;
       img.onload=()=>{
-        const max=1200;
+        const max=480;
         const scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
         const canvas=document.createElement("canvas");
         canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));
         canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
         canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
-        resolve(canvas.toDataURL("image/jpeg",0.80));
+        resolve(canvas.toDataURL("image/jpeg",0.55));
       };
       img.src=reader.result;
     };
