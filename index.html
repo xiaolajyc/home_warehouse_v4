@@ -426,7 +426,7 @@ input,select,textarea,button{touch-action:manipulation}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V41</strong>
+          <strong>V42</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -1435,7 +1435,7 @@ function openContainerDetail(id){
       <div><b>状态：</b>${esc(c.status)}</div>
       <div style="margin-top:8px">${tagsOf(c.tags).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}</div>
       ${c.notes?`<p class="muted">${esc(c.notes)}</p>`:""}
-      <div class="row spread" style="margin-top:12px"><h3 style="margin:0">箱内物品</h3><div class="row"><button type="button" class="secondary" id="detailBatchAdd">＋ 批量新增</button><button type="button" class="secondary" id="detailBatchOp">批量操作</button></div></div>
+      <div class="row spread" style="margin-top:12px"><h3 style="margin:0">箱内物品</h3><div class="row"><button type="button" class="secondary" id="detailBatchAdd">＋ 批量新增</button><button type="button" class="secondary" id="detailBatchMin">批量最低库存</button><button type="button" class="secondary" id="detailBatchOp">批量操作</button></div></div>
       <div id="containerBatchList" style="margin-top:8px">
       ${rows.length?rows.map(x=>{const i=item(x.itemId);return `<label class="item" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start"><input type="checkbox" class="batchItemCheck" value="${esc(x.id)}" style="margin-top:3px"><span style="min-width:0;display:block;overflow-wrap:anywhere"><div style="display:flex;align-items:center;gap:8px;min-width:0">${i?.photo?`<img class="item-photo-thumb" src="${i.photo}" alt="">`:""}<b style="display:block;line-height:1.4;word-break:break-word">${esc(i?.name||"未知物品")}</b></div>${i?.variant?`<span class="muted" style="display:block;margin-top:2px;word-break:break-word">${esc(i.variant)}</span>`:""}<span class="muted" style="display:block;margin-top:4px;line-height:1.4">数量：${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}${Number(x.inUseQty)>0?` · ⭐ 使用中 ${esc(x.inUseQty)}`:""}</span></span></label>`}).join(""):'<div class="empty">箱内为空</div>'}
       </div>
@@ -1443,6 +1443,7 @@ function openContainerDetail(id){
     `,()=>closeModal());
     $("#modalSubmit").textContent="关闭";
     $("#detailBatchAdd").onclick=()=>openBatchAddToContainer(id);
+    $("#detailBatchMin").onclick=()=>openContainerBatchMinStock(id);
     $("#detailBatchOp").onclick=()=>openContainerBatchOperation(id);
     $("#detailDelete").onclick=()=>{
       if(containerItems(id).some(x=>Number(x.quantity)>0)){alert("该收纳箱还有物品，不能删除。请先清空箱内物品。");return}
@@ -1504,6 +1505,32 @@ function openBatchAddToContainer(containerId){
     });
     c.status="ACTIVE";log("ADD_ITEM","批量新增库存",{containerId,quantity:added,notes:`共 ${parsed.length} 项`});closeModal();renderAll();toast(`已批量新增 ${parsed.length} 种物品`);
   });
+}
+function openContainerBatchMinStock(containerId){
+  const c=container(containerId);if(!c)return;
+  const rows=containerItems(containerId).filter(x=>Number(x.quantity)>0);
+  if(!rows.length){toast("箱内没有库存物品");return}
+  openModal(`批量设置最低库存 · ${c.name}`,`
+    <div class="notice">选择箱内需要设置的物品，然后输入统一的最低库存。此设置作用于这些物品本身，之后在其他收纳箱中的库存也会使用这个最低库存。</div>
+    <label>最低库存<input id="batchMinStockValue" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
+    <div class="actions"><button type="button" class="ghost" id="batchMinSelectAll">全选</button><button type="button" class="ghost" id="batchMinSelectNone">取消全选</button></div>
+    <div class="list" style="max-height:45vh;overflow:auto">
+      ${rows.map(x=>{const i=item(x.itemId);return `<label class="item" style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start"><input type="checkbox" class="batchMinCheck" value="${esc(x.itemId)}" checked style="margin-top:3px"><span style="min-width:0;display:block;overflow-wrap:anywhere"><b style="display:block;line-height:1.4">${esc(i?.name||"未知物品")}</b><span class="muted">当前最低库存：${esc(Number(i?.minStock)||0)} ${esc(i?.unit||x.unit||"")} · 箱内库存：${esc(x.quantity)} ${esc(x.unit||i?.unit||"")}</span></span></label>`}).join("")}
+    </div>
+    ${modalFormButtons("保存最低库存")}
+  `,()=>{
+    const selected=[...$$('.batchMinCheck:checked')].map(x=>x.value);
+    if(!selected.length)throw Error("请至少选择一个物品");
+    const min=Math.max(0,Math.round(Number($("#batchMinStockValue").value)||0));
+    selected.forEach(itemId=>{
+      const i=item(itemId);if(!i)return;
+      i.minStock=min;
+      log("MASTER","批量设置最低库存",{itemId,containerId,notes:`最低库存设为 ${min} ${i.unit||""}`});
+    });
+    closeModal();renderAll();toast(`已设置 ${selected.length} 个物品的最低库存为 ${min}`);
+  });
+  $("#batchMinSelectAll").onclick=()=>$$('.batchMinCheck').forEach(x=>x.checked=true);
+  $("#batchMinSelectNone").onclick=()=>$$('.batchMinCheck').forEach(x=>x.checked=false);
 }
 function openContainerBatchOperation(containerId){
   const c=container(containerId);
@@ -1970,7 +1997,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=41").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=42").catch(() => {});
   });
 }
 
