@@ -426,7 +426,7 @@ input,select,textarea,button{touch-action:manipulation}
         <h3>版本信息</h3>
         <div class="row spread">
           <span class="muted">当前版本</span>
-          <strong>V48</strong>
+          <strong>V49</strong>
         </div>
       </div>
       <div class="card sync-card" style="margin-bottom:14px">
@@ -450,7 +450,7 @@ input,select,textarea,button{touch-action:manipulation}
         </div>
         <label class="sync-check"><input id="driveAutoSync" type="checkbox"> 数据修改后自动同步</label>
         <div id="driveHint" class="muted">同步文件只保存本应用的仓库 JSON 数据；不会上传其他 Drive 文件。</div>
-        <div class="muted" style="margin-top:8px">V48：IndexedDB 主数据库；照片独立保存为 Blob。启动时会检查并修复历史照片，旧数据不会在迁移成功前删除。</div>
+        <div class="muted" style="margin-top:8px">V49：IndexedDB 主数据库；照片独立保存为 Blob；修复库存新增默认入库箱记忆。</div>
       </div>
       <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
         <div class="card">
@@ -660,7 +660,7 @@ function normalizeDbObject(x){
   if(!Array.isArray(x.locations))x.locations=[];if(!Array.isArray(x.containers))x.containers=[];if(!Array.isArray(x.items))x.items=[];if(!Array.isArray(x.containerItems))x.containerItems=[];
   x.items.forEach(i=>{i.minStock=Math.max(0,Math.round(Number(i.minStock)||0));i.zeroStockAlert=i.zeroStockAlert===true});
   x.containerItems.forEach(ci=>{ci.quantity=Math.max(0,Math.round(Number(ci.quantity)||0));ci.inUseQty=Math.max(0,Math.min(ci.quantity,Math.round(Number(ci.inUseQty)||0)));if(!ci.updatedAt)ci.updatedAt=iso()});
-  if(!Array.isArray(x.transactions))x.transactions=[];if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];
+  if(!Array.isArray(x.transactions))x.transactions=[];if(!Array.isArray(x.checkSchedules))x.checkSchedules=[];if(!Array.isArray(x.checkRecords))x.checkRecords=[];if(!x.settings||typeof x.settings!=="object"||Array.isArray(x.settings))x.settings={};
 }
 async function storeLegacySnapshot(idb, legacy){
   if(!legacy)return;
@@ -1841,6 +1841,15 @@ function operationContainerOptions(itemId, selected=""){
 }
 
 
+// 记住上一次真正执行“新增数量”时使用的入库箱。
+// 这个偏好保存在 IndexedDB 的 settings 中，因此刷新页面/PWA 重启后仍然保留。
+function preferredAddContainerId(){
+  const boxes=db.containers.filter(c=>c.status!=="ARCHIVED");
+  const preferred=db.settings?.lastAddContainerId||"";
+  if(preferred && boxes.some(c=>c.id===preferred))return preferred;
+  return boxes[0]?.id||"";
+}
+
 // 新增数量使用独立的收纳箱列表，不受取出数量的库存过滤影响。
 function addContainerOptions(selected=""){
   const boxes=db.containers.filter(c=>c.status!=="ARCHIVED");
@@ -1851,9 +1860,10 @@ function addContainerOptions(selected=""){
 
 function openItemOperation(id){
   const i=item(id);if(!i)return;
+  const rememberedAddContainer=preferredAddContainerId();
   openModal(`物品库存操作 · ${i.name}`,`
     <label>操作<select id="f_op"><option value="add">新增数量</option><option value="remove">取出数量</option><option value="transfer">箱间转移</option><option value="setUseQty">设置“正在使用 / 已开封”数量</option></select></label>
-    <label>收纳箱<select id="f_container">${addContainerOptions()}</select></label>
+    <label>收纳箱<select id="f_container">${addContainerOptions(rememberedAddContainer)}</select></label>
     <label id="f_to_wrap" class="hidden">目标收纳箱<select id="f_to">${optionsContainers()}</select></label>
     <label>数量<input id="f_qty" type="number" min="1" step="1" value="1" inputmode="numeric"></label>
     <label>备注<input id="f_note" placeholder="例如：新买入 / 用掉 / 整理"></label>
@@ -1868,6 +1878,8 @@ function openItemOperation(id){
       if(!row){row={id:uid("ci"),containerId:cid,itemId:id,quantity:0,unit:i.unit,notes:""};db.containerItems.push(row)}
       const before=row.quantity;row.quantity+=qty;row.inUseQty=Math.max(0,Math.min(Number(row.quantity)||0,Number(row.inUseQty)||0));row.updatedAt=iso();
       const c=container(cid);c.status="ACTIVE";
+      if(!db.settings||typeof db.settings!=="object")db.settings={};
+      db.settings.lastAddContainerId=cid;
       log("ADD_ITEM","新增物品",{containerId:cid,itemId:id,quantity:qty,unit:i.unit,notes:$("#f_note").value.trim()||`前 ${before}，后 ${row.quantity}`});
     }else if(op==="remove"){
       if(!row||row.quantity<qty)throw Error(`该收纳箱中的库存不足。当前为 ${row?.quantity||0} ${i.unit||""}`);
@@ -1905,20 +1917,21 @@ function openItemOperation(id){
     }
     closeModal();renderAll();toast("操作完成");
   });
+  let lastOp="add";
   const sync=()=>{
     const op=$("#f_op").value;
     const source=$("#f_container");
-    const oldSource=source.value;
 
-    // 每次切换操作都重新生成来源箱列表：
-    // 新增 = 所有可用箱
-    // 取出 = 只有有库存的箱
-    // 转移 = 只有有库存的来源箱
-    // 设置使用中 = 只有有库存的箱
+    // 各操作模式独立管理来源箱：
+    // 新增 = 始终回到上一次“实际入库”使用的箱子（首次则用第一个可用箱）；
+    // 从新增切走再切回来时，不被“取出/转移”当前选中的来源箱污染。
+    // 取出/转移/设置使用中 = 继续使用该模式自己的库存箱逻辑。
     if(op==="add"){
-      source.innerHTML=addContainerOptions(oldSource);
+      const selected = lastOp==="add" ? source.value : preferredAddContainerId();
+      source.innerHTML=addContainerOptions(selected);
     }else{
-      source.innerHTML=operationContainerOptions(id,oldSource);
+      const selected = lastOp==="add" ? "" : source.value;
+      source.innerHTML=operationContainerOptions(id,selected);
     }
 
     $("#f_to_wrap").classList.toggle("hidden",op!=="transfer");
@@ -1933,10 +1946,11 @@ function openItemOperation(id){
       $("#inUseWrap").style.display=(op==="add"||op==="transfer"||op==="setUseQty")?"block":"none";
 
     $("#operationHelp").textContent=
-      op==="add"?"新增数量：把物品放入指定收纳箱。所有可用收纳箱都可以选择。":
+      op==="add"?"新增数量：把物品放入指定收纳箱。默认使用上一次入库的收纳箱。":
       op==="remove"?"取出数量：只从已有该物品库存的收纳箱取出，并优先显示正在使用的库存。":
       op==="transfer"?"箱间转移：来源收纳箱只显示已有该物品库存的箱子；目标收纳箱独立选择，不受来源限制。":
       op==="setUseQty"?"设置当前收纳箱中有多少数量正在使用 / 已开封。":"箱间操作";
+    lastOp=op;
   };
   $("#f_op").onchange=sync;sync();
 }
@@ -2103,7 +2117,7 @@ if(window.google?.accounts?.oauth2)gisInit();
 <script>
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=48").catch(() => {});
+    navigator.serviceWorker.register("./sw.js?v=49").catch(() => {});
   });
 }
 
